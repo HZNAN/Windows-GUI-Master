@@ -68,18 +68,28 @@ class ReactAgentLoop:
         self._cache_screen_info()
 
     def _cache_screen_info(self):
-        from tools.mouse import _screen_info_cache
-        from tools.keyboard import _screen_info_cache as kb_screen_info_cache
+        from tools._shared import _screen_info_cache
         if _screen_info_cache[0] is None:
             from drivers.screen_capture import get_screen_capture
+            import cv2
             screen = get_screen_capture()
             img, _ = screen.auto_save(prefix="temp")
-            import cv2
             orig_h, orig_w = img.shape[:2]
-            info = {"orig_w": orig_w, "orig_h": orig_h}
-            _screen_info_cache[0] = info
-            kb_screen_info_cache[0] = info
+            _screen_info_cache[0] = {"orig_w": orig_w, "orig_h": orig_h}
             logger.info(f"屏幕尺寸已缓存: {orig_w}x{orig_h}")
+
+    @staticmethod
+    def _clean_tool_name(raw_name: str) -> str:
+        name = raw_name.split('"')[0].strip() if '"' in raw_name else raw_name.strip()
+        return name.lower()
+
+    @staticmethod
+    def _clean_tool_args(raw_args) -> dict:
+        if hasattr(raw_args, 'model_dump'):
+            return {k: v for k, v in raw_args.model_dump().items() if v is not None}
+        if isinstance(raw_args, dict):
+            return {k: v for k, v in raw_args.items() if v is not None}
+        return {}
 
     def _execute_tool(self, tool_name: str, tool_args: dict) -> str:
         """执行单个工具"""
@@ -236,34 +246,19 @@ class ReactAgentLoop:
                         error_reason="模型未调用任何工具"
                     )
 
-                # 收集当前轮次的操作（用于 continue/retry 时追加到 history）
-                # 每个操作记录: (操作自身的reason, 工具输出)
                 current_turn_operations = []
 
-                # 执行所有工具
                 for tc in response.tool_calls:
-                    raw_name = tc.get("name", "")
-                    # 清理工具名称（处理 LangChain 输出格式问题）
-                    # 去掉末尾的 "string="true 等冗余内容
-                    clean_name = raw_name.split('"')[0].strip() if '"' in raw_name else raw_name.strip()
-                    tool_name = clean_name.lower()
-                    raw_args = tc.get("args", {})
-                    if hasattr(raw_args, 'model_dump'):
-                        tool_args = {k: v for k, v in raw_args.model_dump().items() if v is not None}
-                    elif isinstance(raw_args, dict):
-                        tool_args = {k: v for k, v in raw_args.items() if v is not None}
-                    else:
-                        tool_args = {}
+                    tool_name = self._clean_tool_name(tc.get("name", ""))
+                    tool_args = self._clean_tool_args(tc.get("args", {}))
 
                     logger.info(f"执行工具: {tool_name}({tool_args})")
                     result = self._execute_tool(tool_name, tool_args)
                     logger.info(f"工具结果: {result}")
 
-                    # 每个工具执行后自动截图
                     screenshot_data = screenshot.func()
                     screenshot_url = screenshot_data["image"]
 
-                    # 处理 finish/continue/retry
                     if tool_name == "finish":
                         return ReactResult(
                             goal=self.goal,
@@ -273,38 +268,30 @@ class ReactAgentLoop:
                         )
 
                     elif tool_name == "continue_steps":
-                        # 清空 history，然后追加当前操作 (check)
+                        reason = tool_args.get('reason', '')
                         history = []
-                        for op_reason, op_output in current_turn_operations:
-                            history.append((op_reason, op_output, "check"))
+                        for _, op_output in current_turn_operations:
+                            history.append((reason, op_output, "check"))
 
                     elif tool_name == "retry":
-                        # 不清空，把上一条操作改成 (fail)，然后追加当前操作 (check)
-                        # 把 history 中最后一个变成 (fail)
-                        if history:
-                            last_idx = len(history) - 1
-                            last_reason, last_output, _ = history[last_idx]
-                            history[last_idx] = (last_reason, last_output, "fail")
-                        # 追加当前操作 (check)
-                        for op_reason, op_output in current_turn_operations:
-                            history.append((op_reason, op_output, "check"))
+                        reason = tool_args.get('reason', '')
+                        history = [
+                            (r, o, "fail") for r, o, _ in history
+                        ]
+                        for _, op_output in current_turn_operations:
+                            history.append((reason, op_output, "check"))
 
                     else:
-                        # 普通工具，记录到 current_turn_operations
-                        # reason 从当前工具的参数中获取（表示这个操作本身的执行目标）
-                        op_reason = tool_args.get('reason', '')
-                        current_turn_operations.append((op_reason, result))
+                        current_turn_operations.append((tool_name, result))
 
-                # 最后一个工具不是 finish/continue/retry
-                last_raw = response.tool_calls[-1].get("name", "")
-                last_tool = last_raw.lower().replace('"string="true', '').replace('string="true', '').strip()
-                logger.info(f"最后一个工具: {last_tool}, state_tools: {STATE_TOOLS}")
+                last_tool = self._clean_tool_name(
+                    response.tool_calls[-1].get("name", "")
+                )
                 if last_tool not in STATE_TOOLS:
-                    # 模型忘记调用状态工具，自动插入 continue_steps
                     logger.warning(f"模型未调用状态工具，自动添加 continue_steps")
                     screenshot_data = screenshot.func()
                     screenshot_url = screenshot_data["image"]
-                    continue  # 继续下一轮
+                    continue
 
             # 达到最大步数
             return ReactResult(
