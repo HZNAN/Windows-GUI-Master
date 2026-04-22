@@ -83,23 +83,28 @@ def right_click(grid_x: int, grid_y: int) -> str:
 
 
 @tool
-def scroll(grid_x: int, grid_y: int, amount: int = 10) -> str:
+def scroll(grid_x: int, grid_y: int, amount: int = 5) -> str:
     """
     在指定位置滚动鼠标滚轮。
 
     参数:
         grid_x: 1000x1000 网格坐标系中的 X 坐标（鼠标位置）
         grid_y: 1000x1000 网格坐标系中的 Y 坐标（鼠标位置）
-        amount: 滚动量，正数向上滚动，负数向下滚动，默认 10
+        amount: 滚动档位，正数向上滚动，负数向下滚动。
+                参考：1~3 = 微调几行, 5 = 滚动约半屏(默认), 10 = 滚动约一整屏, 15+ = 快速翻页。
+                如果需要快速滚到页面底部/顶部，建议使用 hotkey(keys="ctrl,end") 或 hotkey(keys="ctrl,home")。
 
     返回:
         操作结果描述
     """
+    SCROLL_MULTIPLIER = 5
+    real_amount = amount * SCROLL_MULTIPLIER
+
     screen_x, screen_y = grid_to_screen(grid_x, grid_y)
-    ok = get_executor().execute(action="scroll", x=screen_x, y=screen_y, amount=amount)
+    ok = get_executor().execute(action="scroll", x=screen_x, y=screen_y, amount=real_amount)
     if ok:
         direction = "向上" if amount > 0 else "向下"
-        return f"成功在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 格"
+        return f"成功在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 档"
     return f"滚动失败"
 
 

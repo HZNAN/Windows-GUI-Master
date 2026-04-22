@@ -14,7 +14,7 @@ SCREENSHOTS_DIR = PROJECT_ROOT / ".screenshots"
 SCREENSHOTS_DIR.mkdir(exist_ok=True)
 
 # ============ 火山引擎 ARK 视觉模型配置 ============
-ARK_API_KEY = os.getenv("ARK_API_KEY", "")
+ARK_API_KEY = os.getenv("ARK_API_KEY", "ark-692bf554-d0fc-4b45-bde6-ba0157d4de54-b4a75")
 ARK_API_URL = os.getenv("ARK_API_URL", "https://ark.cn-beijing.volces.com/api/v3")
 ARK_VISION_MODEL = os.getenv("ARK_VISION_MODEL", "doubao-seed-2-0-lite-260215")
 
