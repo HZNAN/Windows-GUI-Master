@@ -1,0 +1,61 @@
+{
+  "suite": "飞书云盘功能测试",
+  "cases": [
+    {
+      "id": "DRIVE-001",
+      "name": "创建文件夹",
+      "goal": "在飞书云盘中创建一个新文件夹，名称：自动化测试文件夹",
+      "verify_method": "api",
+      "expected_result": "文件夹创建成功，在云盘中可见",
+      "tags": ["云盘", "创建文件夹", "核心流程"]
+    },
+    {
+      "id": "DRIVE-002",
+      "name": "上传文件",
+      "goal": "将本地测试文件上传到飞书云盘根目录",
+      "verify_method": "api",
+      "expected_result": "文件上传成功，可在云盘中看到该文件",
+      "tags": ["云盘", "上传文件"]
+    },
+    {
+      "id": "DRIVE-003",
+      "name": "上传文件到指定文件夹",
+      "goal": "将本地测试文件上传到'自动化测试文件夹'中",
+      "verify_method": "api",
+      "expected_result": "文件上传成功且位于目标文件夹内",
+      "tags": ["云盘", "上传文件"]
+    },
+    {
+      "id": "DRIVE-004",
+      "name": "搜索文件",
+      "goal": "在云盘中搜索名称包含'测试'的文件",
+      "verify_method": "both",
+      "expected_result": "搜索结果正确显示所有匹配的文件",
+      "tags": ["云盘", "搜索文件"]
+    },
+    {
+      "id": "DRIVE-005",
+      "name": "下载文件",
+      "goal": "从云盘下载'测试文件.txt'到本地Downloads目录",
+      "verify_method": "screenshot",
+      "expected_result": "文件下载成功，本地文件存在且内容正确",
+      "tags": ["云盘", "下载文件"]
+    },
+    {
+      "id": "DRIVE-006",
+      "name": "删除文件",
+      "goal": "删除云盘中的'测试文件.txt'",
+      "verify_method": "api",
+      "expected_result": "文件已删除，云盘中不再显示",
+      "tags": ["云盘", "删除文件"]
+    },
+    {
+      "id": "DRIVE-007",
+      "name": "重命名文件夹",
+      "goal": "将'自动化测试文件夹'重命名为'AI Agent测试'",
+      "verify_method": "api",
+      "expected_result": "文件夹名称已更新",
+      "tags": ["云盘", "重命名"]
+    }
+  ]
+}

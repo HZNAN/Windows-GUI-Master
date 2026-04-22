@@ -1,0 +1,53 @@
+{
+  "suite": "飞书云文档功能测试",
+  "cases": [
+    {
+      "id": "DOC-001",
+      "name": "创建空白文档",
+      "goal": "在飞书中创建一个新空白文档，标题：自动化测试文档",
+      "verify_method": "api",
+      "expected_result": "文档创建成功，标题正确显示",
+      "tags": ["文档", "创建文档", "核心流程"]
+    },
+    {
+      "id": "DOC-002",
+      "name": "编辑文档内容",
+      "goal": "打开'自动化测试文档'，在文档开头输入段落：这是自动化测试创建的文档",
+      "verify_method": "both",
+      "expected_result": "文字内容正确添加到文档中",
+      "tags": ["文档", "编辑内容"]
+    },
+    {
+      "id": "DOC-003",
+      "name": "设置文档标题",
+      "goal": "将当前文档标题修改为'飞书AI Agent测试文档'",
+      "verify_method": "api",
+      "expected_result": "文档标题已更新",
+      "tags": ["文档", "标题设置"]
+    },
+    {
+      "id": "DOC-004",
+      "name": "文档分享",
+      "goal": "将'自动化测试文档'设置为组织内可见并分享链接",
+      "verify_method": "screenshot",
+      "expected_result": "分享设置成功，显示分享链接",
+      "tags": ["文档", "分享"]
+    },
+    {
+      "id": "DOC-005",
+      "name": "创建文档文件夹",
+      "goal": "在云文档根目录创建一个新文件夹，名称：AI测试文档集",
+      "verify_method": "api",
+      "expected_result": "文件夹创建成功",
+      "tags": ["文档", "文件夹管理"]
+    },
+    {
+      "id": "DOC-006",
+      "name": "移动文档到文件夹",
+      "goal": "将'自动化测试文档'移动到'AI测试文档集'文件夹",
+      "verify_method": "api",
+      "expected_result": "文档已移动到目标文件夹",
+      "tags": ["文档", "文档管理"]
+    }
+  ]
+}
