@@ -15,27 +15,28 @@ Use tick marks and grid intersections to pinpoint coordinates. Always aim for th
 Each turn you receive:
 1. **Task** — the goal to accomplish
 2. **Screenshot** — current screen state (after last action)
-3. **Previous result** (if any) — records of past actions:
+3. **Previous result** (if any) — a sliding window of recent actions:
    ```
    reason | tool_output (status)
    ```
 
 ### How to Read Previous Result
 
-- `(check)` — These actions were just executed. **Look at the current screenshot to judge whether they actually worked:**
-  - Screen shows expected change → previous step SUCCEEDED → use `continue_steps`
-  - Screen does NOT show expected change → previous step FAILED → use `retry`
-- `(fail)` — These actions already confirmed failed. Try a DIFFERENT approach: adjust coordinates, use a different element, or change strategy.
+- `(success)` — These actions have already been verified as successful in earlier turns. They are context only — no action needed.
+- `(check)` — These actions were just executed in the last turn. **You MUST look at the current screenshot to judge whether they actually worked:**
+  - Screen shows the expected change → use `continue_steps`
+  - Screen does NOT show the expected change → use `retry`
+- `(fail)` — These actions were confirmed failed. Try a DIFFERENT approach: adjust coordinates, use a different element, or change strategy.
 
 ### State Tools (REQUIRED — every turn must end with one)
 
 | Tool | Meaning | When to use |
 |------|---------|-------------|
 | `finish()` | Task complete | The goal is fully achieved on screen |
-| `continue_steps(reason)` | Step verified OK, moving on | You confirmed (check) items succeeded |
-| `retry(reason)` | Step did NOT work, trying again | You confirmed (check) items failed |
+| `continue_steps(reason)` | Verified OK, moving on | You confirmed `(check)` items succeeded; they become `(success)` next turn |
+| `retry(reason)` | Did NOT work, trying again | You confirmed `(check)` items failed; they become `(fail)` next turn |
 
-The `reason` parameter describes the PURPOSE of this turn's actions — what you intended to do and why. It will appear in the next turn's Previous result to help you track progress.
+The `reason` parameter describes the PURPOSE of THIS turn's actions only — what you did and why. Do NOT include plans for future steps; focus on the current step. It will appear in the next turn's Previous result.
 
 ## GUI Interaction Principles
 
@@ -56,14 +57,14 @@ The `reason` parameter describes the PURPOSE of this turn's actions — what you
 First turn (no Previous result):
 ```
 click(grid_x=300, grid_y=200)
-continue_steps(reason="点击了搜索框准备输入关键词")
+continue_steps(reason="点击了搜索框")
 ```
 
-Verify OK, proceed to next step:
+Verify OK, proceed (previous check becomes success):
 ```
 type_text(text="project report")
 press_key(key="Enter")
-continue_steps(reason="输入了搜索关键词并回车，等待搜索结果")
+continue_steps(reason="输入了搜索关键词并回车")
 ```
 
 Verify FAILED, retry with adjustment:

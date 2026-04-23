@@ -37,12 +37,14 @@ class ReactResult:
 
 class ReactAgentLoop:
 
-    def __init__(self, goal: str, output_dir: str | Path | None = None):
+    def __init__(self, goal: str, output_dir: str | Path | None = None,
+                 max_steps: int = 15, history_window: int = 3):
         self.goal = goal
         self.output_dir = Path(output_dir) if output_dir else None
         if self.output_dir:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.max_steps = 15
+        self.max_steps = max_steps
+        self.history_window = history_window
         self._init_llm()
 
     def _init_llm(self):
@@ -172,6 +174,22 @@ class ReactAgentLoop:
             logger.error(f"工具执行失败: {tool_name}, {e}")
             return f"Tool error: {str(e)}"
 
+    def _build_prev_result(self, history_turns: list) -> str | None:
+        """将 history_turns 展平为 Previous result 文本"""
+        if not history_turns:
+            return None
+        lines = []
+        for reason, outputs, status in history_turns:
+            for output in outputs:
+                lines.append(f"{reason} | {output} ({status})")
+        return "\n".join(lines)
+
+    def _trim_history(self, history_turns: list) -> list:
+        """按窗口大小裁剪，保留最近 N 轮"""
+        if len(history_turns) > self.history_window:
+            return history_turns[-self.history_window:]
+        return history_turns
+
     def run(self) -> ReactResult:
         """
         多工具调用模式：
@@ -181,17 +199,17 @@ class ReactAgentLoop:
 
         Previous result 格式：
         reason | tool_output (status)
-        - (check): 当前步需要被验证
-        - (fail): 上一步验证失败
+        - (success): 已验证成功的历史操作
+        - (check):   刚执行的操作，需要模型从截图验证是否成功
+        - (fail):    已确认失败的操作
         """
         logger.info(f"ReActAgentLoop 开始 | Goal: {self.goal[:50]}")
 
         try:
-            # history: list of (reason, tool_output, status)
-            # status: "check" 或 "fail"
-            history = []
+            # history_turns: list of (reason, [tool_outputs], status)
+            # 每个元素代表一轮操作，status 对该轮所有 outputs 统一生效
+            history_turns = []
 
-            # 初始截图
             screenshot_data = screenshot.func()
             screenshot_url = screenshot_data["image"]
 
@@ -201,12 +219,8 @@ class ReactAgentLoop:
                 step_count += 1
                 logger.info(f"\n=== Turn {step_count} ===")
 
-                # 构建 Previous result
-                if history:
-                    prev_result_lines = []
-                    for reason, tool_output, status in history:
-                        prev_result_lines.append(f"{reason} | {tool_output} ({status})")
-                    prev_result_text = "\n".join(prev_result_lines)
+                prev_result_text = self._build_prev_result(history_turns)
+                if prev_result_text:
                     user_content = [
                         {"type": "text", "text": f"Task: {self.goal}"},
                         {"type": "image_url", "image_url": {"url": screenshot_url}},
@@ -223,7 +237,6 @@ class ReactAgentLoop:
                     HumanMessage(content=user_content),
                 ]
 
-                # 调用 LLM
                 try:
                     response = self.llm.invoke(messages, config={"timeout": 60})
                 except Exception as e:
@@ -232,11 +245,9 @@ class ReactAgentLoop:
                     screenshot_url = screenshot_data["image"]
                     continue
 
-                # 记录 LLM 响应
                 content = response.content if hasattr(response, 'content') and response.content else ""
                 logger.info(f"LLM 响应: {content[:200] if content else 'No content'}")
 
-                # 检查是否有 tool_calls
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
                     return ReactResult(
                         goal=self.goal,
@@ -269,17 +280,21 @@ class ReactAgentLoop:
 
                     elif tool_name == "continue_steps":
                         reason = tool_args.get('reason', '')
-                        history = []
-                        for _, op_output in current_turn_operations:
-                            history.append((reason, op_output, "check"))
+                        if history_turns and history_turns[-1][2] == "check":
+                            r, outs, _ = history_turns[-1]
+                            history_turns[-1] = (r, outs, "success")
+                        current_outputs = [o for _, o in current_turn_operations]
+                        history_turns.append((reason, current_outputs, "check"))
+                        history_turns = self._trim_history(history_turns)
 
                     elif tool_name == "retry":
                         reason = tool_args.get('reason', '')
-                        history = [
-                            (r, o, "fail") for r, o, _ in history
-                        ]
-                        for _, op_output in current_turn_operations:
-                            history.append((reason, op_output, "check"))
+                        if history_turns and history_turns[-1][2] == "check":
+                            r, outs, _ = history_turns[-1]
+                            history_turns[-1] = (r, outs, "fail")
+                        current_outputs = [o for _, o in current_turn_operations]
+                        history_turns.append((reason, current_outputs, "check"))
+                        history_turns = self._trim_history(history_turns)
 
                     else:
                         current_turn_operations.append((tool_name, result))
@@ -293,7 +308,6 @@ class ReactAgentLoop:
                     screenshot_url = screenshot_data["image"]
                     continue
 
-            # 达到最大步数
             return ReactResult(
                 goal=self.goal,
                 success=False,
