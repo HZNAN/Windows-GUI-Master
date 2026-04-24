@@ -8,6 +8,7 @@ from loguru import logger
 
 from drivers.screen_capture import get_screen_capture, ScreenCapture
 from drivers.input_control import InputControl
+from core.virtual_cursor import get_virtual_cursor
 
 
 class ExecutionEngine:
@@ -19,6 +20,7 @@ class ExecutionEngine:
     def __init__(self):
         self.screen = get_screen_capture()
         self.input = InputControl()
+        self._virtual_cursor = get_virtual_cursor()
 
     def execute(self, action: str, x: int | None = None, y: int | None = None,
                 text: str | None = None, key: str | None = None,
@@ -45,6 +47,8 @@ class ExecutionEngine:
                 if x is None or y is None:
                     logger.error(f"click 缺少坐标: ({x}, {y})")
                     return False
+                self._virtual_cursor.move_to(x, y)
+                time.sleep(0.1)  # 等待动画完成
                 self.input.click(x, y, button=button)
                 logger.info(f"执行 click: ({x}, {y}), button={button}")
                 return True
@@ -53,7 +57,7 @@ class ExecutionEngine:
                 if x is None or y is None:
                     logger.error(f"move 缺少坐标: ({x}, {y})")
                     return False
-                self.input.move_to(x, y, duration=0.3)
+                self._virtual_cursor.move_to(x, y)
                 logger.info(f"执行 move: ({x}, {y})")
                 return True
 
