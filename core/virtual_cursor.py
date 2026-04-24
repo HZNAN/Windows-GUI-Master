@@ -51,10 +51,11 @@ class VirtualCursor:
     - 通过 Win32Overlay 绘制光标
     """
 
-    def __init__(self, amplitude: int = 15, duration: float = 1.0, fps: int = 60):
-        self.amplitude = amplitude  # 曲线幅度扰动 (px)
-        self.duration = duration  # 总时长 (s)
-        self.fps = fps
+    def __init__(self, amplitude: int = None, duration: float = None, fps: int = None):
+        from config.settings import VIRTUAL_CURSOR_AMPLITUDE, VIRTUAL_CURSOR_DURATION, VIRTUAL_CURSOR_FPS
+        self.amplitude = amplitude if amplitude is not None else VIRTUAL_CURSOR_AMPLITUDE  # 曲线幅度扰动 (px)
+        self.duration = duration if duration is not None else VIRTUAL_CURSOR_DURATION  # 总时长 (s)
+        self.fps = fps if fps is not None else VIRTUAL_CURSOR_FPS
         self._overlay = None
         self._current_pos = (0, 0)
         self._running = False

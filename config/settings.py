@@ -31,3 +31,8 @@ LOG_FILE = PROJECT_ROOT / "logs" / "agent.log"
 # 相对路径: 相对于 PROJECT_ROOT/cursors/ 目录，如 "universe"
 # 绝对路径: 以 / 或盘符开头，如 "C:/custom_cursors/my_cursor" 或 "/usr/share/cursors"
 VIRTUAL_CURSOR_PATH = os.getenv("VIRTUAL_CURSOR_PATH", "universe")
+
+# 虚拟光标动画参数
+VIRTUAL_CURSOR_DURATION = float(os.getenv("VIRTUAL_CURSOR_DURATION", "0.5"))  # 移动时长（秒），越小越快
+VIRTUAL_CURSOR_FPS = int(os.getenv("VIRTUAL_CURSOR_FPS", "60"))  # 帧率，越高越平滑
+VIRTUAL_CURSOR_AMPLITUDE = int(os.getenv("VIRTUAL_CURSOR_AMPLITUDE", "15"))  # 曲线幅度扰动（像素）
