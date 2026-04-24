@@ -26,3 +26,8 @@ STEP_TIMEOUT = int(os.getenv("STEP_TIMEOUT", "30"))
 # ============ 日志配置 ============
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = PROJECT_ROOT / "logs" / "agent.log"
+
+# ============ 虚拟光标配置 ============
+# 相对路径: 相对于 PROJECT_ROOT/cursors/ 目录，如 "universe"
+# 绝对路径: 以 / 或盘符开头，如 "C:/custom_cursors/my_cursor" 或 "/usr/share/cursors"
+VIRTUAL_CURSOR_PATH = os.getenv("VIRTUAL_CURSOR_PATH", "universe")

@@ -30,6 +30,8 @@ class Win32Overlay:
         self._visible = False
         self._pos = (-100, -100)
         self._cursor_png_path: Optional[str] = None
+        self._cursor_type: str = "arrow"
+        self._hicons: dict = {}  # 缓存不同类型的 HICON
 
     @classmethod
     def get_instance(cls) -> "Win32Overlay":
@@ -38,8 +40,39 @@ class Win32Overlay:
                 cls._instance = Win32Overlay()
             return cls._instance
 
-    def _create_cursor_image(self) -> Image.Image:
-        """创建蓝白箭头光标图像"""
+    def _get_cursor_base_dir(self) -> str:
+        """获取光标目录路径"""
+        import os as _os
+        from config.settings import PROJECT_ROOT, VIRTUAL_CURSOR_PATH
+
+        cursor_cfg = VIRTUAL_CURSOR_PATH.strip()
+
+        # 判断是绝对路径还是相对路径
+        # 绝对路径: Windows 以盘符(C:)或UNC(\\)开头，Linux 以 / 开头
+        if cursor_cfg.startswith('/') or cursor_cfg.startswith('\\\\') or (len(cursor_cfg) > 1 and cursor_cfg[1] == ':'):
+            # 绝对路径
+            return cursor_cfg
+        else:
+            # 相对路径: 相对于 PROJECT_ROOT/cursors/
+            return str(PROJECT_ROOT / "cursor" / cursor_cfg)
+
+    def _create_cursor_image(self, cursor_type: str = "arrow") -> Image.Image:
+        """加载自定义光标图像"""
+        import os as _os
+
+        cursor_base = self._get_cursor_base_dir()
+        cursor_path = _os.path.join(cursor_base, f"{cursor_type}.png")
+
+        if _os.path.exists(cursor_path):
+            img = Image.open(cursor_path).convert("RGBA")
+            # 确保尺寸正确
+            if img.size != (24, 24):
+                img = img.resize((24, 24), Image.LANCZOS)
+            return img
+
+        logger.warning(f"Cursor image not found: {cursor_path}, using default")
+
+        # 如果文件不存在，使用默认蓝白箭头
         size = 24
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
@@ -79,24 +112,24 @@ class Win32Overlay:
 
         return img
 
-    def _create_hicon(self, img: Image.Image) -> int:
+    def _create_hicon(self, img: Image.Image, cursor_type: str = "arrow") -> int:
         """将 PIL RGBA 图像转换为 HICON"""
         from ctypes import windll, c_short, c_uint, c_long, Structure, sizeof, c_void_p, byref, cast, POINTER
         import struct
 
         size = 24
 
-        logger.info(f"Starting _create_hicon, image size: {img.size}, mode: {img.mode}")
+        logger.info(f"Starting _create_hicon, image size: {img.size}, mode: {img.mode}, type: {cursor_type}")
 
-        # 首先保存 PNG 到临时文件，作为备用
+        # 保存 PNG 到临时文件
         temp_dir = tempfile.gettempdir()
-        png_path = os.path.join(temp_dir, "virtual_cursor.png")
+        png_path = os.path.join(temp_dir, f"virtual_cursor_{cursor_type}.png")
         img.save(png_path, format="PNG")
         self._cursor_png_path = png_path
         logger.info(f"Saved cursor PNG to: {png_path}")
 
-        # 创建 ICO 文件（PIL 不直接支持 ICO，但我们可以手动创建）
-        ico_path = os.path.join(temp_dir, "virtual_cursor.ico")
+        # ICO 文件路径
+        ico_path = os.path.join(temp_dir, f"virtual_cursor_{cursor_type}.ico")
 
         # ICO Header: 6 bytes
         # - Reserved (2 bytes): 0
@@ -311,12 +344,12 @@ class Win32Overlay:
         hwnd = self.hwnd
         dc, ps = win32gui.BeginPaint(hwnd)
 
-        # 如果有 cursor_hicon，用它绘制
+        # 使用当前光标类型的 HICON
         if self.cursor_hicon:
             win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon, 24, 24, 0, None, win32con.DI_NORMAL)
         else:
-            # 尝试用 LoadImage 加载 ICO 文件
-            ico_path = os.path.join(tempfile.gettempdir(), "virtual_cursor.ico")
+            # 备用：加载对应的 ICO 文件
+            ico_path = os.path.join(tempfile.gettempdir(), f"virtual_cursor_{self._cursor_type}.ico")
             if os.path.exists(ico_path):
                 try:
                     hicon = win32gui.LoadImage(
@@ -352,9 +385,18 @@ class Win32Overlay:
         # 设置透明色键
         win32gui.SetLayeredWindowAttributes(self.hwnd, win32api.RGB(0, 0, 0), 0, win32con.LWA_COLORKEY)
 
-        # 创建光标图标
-        cursor_img = self._create_cursor_image()
-        self.cursor_hicon = self._create_hicon(cursor_img)
+        # 预加载两种光标
+        for cursor_type in ["arrow", "hand"]:
+            img = self._create_cursor_image(cursor_type)
+            hicon = self._create_hicon(img, cursor_type)
+            if hicon:
+                self._hicons[cursor_type] = hicon
+                logger.info(f"Loaded cursor type '{cursor_type}': hicon={hicon}")
+
+        # 使用默认光标类型
+        self.cursor_hicon = self._hicons.get(self._cursor_type)
+        if not self.cursor_hicon and self._hicons:
+            self.cursor_hicon = next(iter(self._hicons.values()))
 
         # 初始隐藏
         win32gui.SetWindowPos(
@@ -362,6 +404,19 @@ class Win32Overlay:
             -100, -100, 24, 24,
             win32con.SWP_NOACTIVATE | win32con.SWP_HIDEWINDOW
         )
+
+    def set_cursor_type(self, cursor_type: str):
+        """设置光标类型（arrow 或 hand）"""
+        if cursor_type not in ("arrow", "hand"):
+            return
+
+        self._cursor_type = cursor_type
+
+        # 如果窗口已创建，切换 HICON
+        if self.hwnd and cursor_type in self._hicons:
+            self.cursor_hicon = self._hicons[cursor_type]
+            win32gui.InvalidateRect(self.hwnd, None, False)
+            win32gui.UpdateWindow(self.hwnd)
 
     def show(self):
         self._ensure_window()
@@ -374,11 +429,17 @@ class Win32Overlay:
             win32gui.ShowWindow(self.hwnd, win32con.SW_HIDE)
         self._visible = False
 
-    def move_cursor(self, x: int, y: int):
+    def move_cursor(self, x: int, y: int, cursor_type: str = "arrow"):
         """移动虚拟光标到指定屏幕坐标"""
         self._ensure_window()
         if not self.hwnd:
             return
+
+        # 如果光标类型改变，切换 HICON
+        if cursor_type != self._cursor_type:
+            self._cursor_type = cursor_type
+            if cursor_type in self._hicons:
+                self.cursor_hicon = self._hicons[cursor_type]
 
         self._pos = (x, y)
         self._visible = True
