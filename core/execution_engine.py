@@ -19,7 +19,7 @@ class ExecutionEngine:
 
     def __init__(self):
         self.screen = get_screen_capture()
-        self.input = InputControl()
+        self.input = InputControl(virtual_mode=True)
         self._virtual_cursor = get_virtual_cursor()
 
     def execute(self, action: str, x: int | None = None, y: int | None = None,

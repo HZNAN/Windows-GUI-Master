@@ -2,9 +2,13 @@
 鼠标键盘输入驱动
 优先使用 pyautogui（跨平台，支持 Windows 截图和输入模拟）
 备选 pirectinput（Windows 专用，更精准）
+
+虚拟光标模式：使用 win32api.mouse_event 模拟点击，不移动真实鼠标
 """
 import time
 import pyautogui
+import win32api
+import win32con
 from loguru import logger
 
 # pyautogui 安全设置：移动到角落不会触发紧急停止
@@ -18,27 +22,66 @@ class InputControl:
     使用 pyautogui 实现鼠标键盘模拟
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, virtual_mode: bool = False):
+        self.virtual_mode = virtual_mode
 
     # ============ 鼠标操作 ============
 
     def click(self, x: int, y: int, button: str = "left"):
         """
-        在指定坐标点击（移动过程模拟人类操作）
+        在指定坐标点击
 
         Args:
             x, y: 目标坐标
             button: 'left' / 'right' / 'middle'
         """
-        self.move_to(x, y, duration=0.3)  # 0.3秒移动时间，更自然
-        self._sleep()
-        pyautogui.click(x=x, y=y, button=button)
+        if self.virtual_mode:
+            self._virtual_click(x, y, button)
+        else:
+            self.move_to(x, y, duration=0.3)
+            self._sleep()
+            pyautogui.click(x=x, y=y, button=button)
         logger.debug(f"鼠标点击: ({x}, {y}), 按钮={button}")
+
+    def _virtual_click(self, x: int, y: int, button: str = "left"):
+        """虚拟点击：移动真实光标到目标 → 点击 → 恢复原位置"""
+        btn_map = {"left": 1, "right": 2, "middle": 4}
+        btn_flag = btn_map.get(button, 1)
+
+        # 保存真实光标位置
+        original_pos = win32api.GetCursorPos()
+
+        # 移动真实光标到目标位置
+        win32api.SetCursorPos((x, y))
+        time.sleep(0.01)  # 短暂等待确保移动完成
+
+        # 触发点击
+        if btn_flag == 1:
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(0.02)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        elif btn_flag == 2:
+            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+            time.sleep(0.02)
+            win32api.mouse_event(win32con.MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+        elif btn_flag == 4:
+            win32api.mouse_event(win32con.MOUSEEVENTF_MIDDLEDOWN, 0, 0, 0, 0)
+            time.sleep(0.02)
+            win32api.mouse_event(win32con.MOUSEEVENTF_MIDDLEUP, 0, 0, 0, 0)
+
+        time.sleep(0.01)
+
+        # 恢复真实光标位置
+        win32api.SetCursorPos(original_pos)
 
     def double_click(self, x: int, y: int, button: str = "left"):
         """双击"""
-        pyautogui.doubleClick(x=x, y=y, button=button)
+        if self.virtual_mode:
+            self._virtual_click(x, y, button)
+            time.sleep(0.1)
+            self._virtual_click(x, y, button)
+        else:
+            pyautogui.doubleClick(x=x, y=y, button=button)
         logger.debug(f"鼠标双击: ({x}, {y})")
 
     def move_to(self, x: int, y: int, duration: float = 0.3):

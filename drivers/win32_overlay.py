@@ -1,24 +1,24 @@
 """
 Windows 透明覆盖层 + 虚拟光标绘制
-使用 win32gui 创建最顶层透明窗口，仅绘制光标不拦截鼠标事件
+使用 24x24 小窗口 + HICON 绘制虚拟光标
 """
-import math
+import os
+import ctypes
+import tempfile
 import threading
-import time
 from typing import Optional
 
-import cv2
-import numpy as np
 import win32api
 import win32con
 import win32gui
 from PIL import Image, ImageDraw
+from loguru import logger
 
 
 class Win32Overlay:
     """
     Windows 透明覆盖层
-    创建最顶层透明窗口，仅绘制虚拟光标，不影响真实鼠标操作
+    创建 24x24 小窗口绘制虚拟光标，不影响真实鼠标操作
     """
 
     _instance: Optional["Win32Overlay"] = None
@@ -26,57 +26,43 @@ class Win32Overlay:
 
     def __init__(self):
         self.hwnd: int = 0
-        self.cursor_img: Optional[Image.Image] = None
         self.cursor_hicon: Optional[int] = None
         self._visible = False
-        self._pos = (-100, -100)  # 初始位置在屏幕外
+        self._pos = (-100, -100)
+        self._cursor_png_path: Optional[str] = None
 
     @classmethod
     def get_instance(cls) -> "Win32Overlay":
-        """单例模式"""
         with cls._lock:
             if cls._instance is None:
                 cls._instance = Win32Overlay()
             return cls._instance
 
     def _create_cursor_image(self) -> Image.Image:
-        """
-        创建蓝白箭头光标图像
-        - 尺寸: 24x24px
-        - 白色实心箭头，无柄，尖部带弧度
-        - 蓝色模糊边缘 (rgba(80, 150, 255, 128))
-        """
+        """创建蓝白箭头光标图像"""
         size = 24
         img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
 
-        # 箭头形状: 无柄，尖部带弧度
-        # 顶点
         tip_x, tip_y = size // 2, 3
-        # 底部中心
         base_x, base_y = size // 2, size - 3
-        # 箭头宽度
         half_width = 6
 
-        # 贝塞尔曲线绘制箭头轮廓，尖部用弧线
-        # 左侧点
         left_x = base_x - half_width
         left_y = base_y - 2
-        # 右侧点
         right_x = base_x + half_width
         right_y = base_y - 2
 
-        # 箭头多边形 (尖部弧线用两个点模拟)
         arrow_points = [
-            (tip_x, tip_y),  # 尖顶
-            (left_x + 2, left_y - 4),  # 左上弧过渡
-            (left_x, left_y),  # 左下
-            (base_x, base_y),  # 底中
-            (right_x, right_y),  # 右下
-            (right_x - 2, right_y - 4),  # 右下弧过渡
+            (tip_x, tip_y),
+            (left_x + 2, left_y - 4),
+            (left_x, left_y),
+            (base_x, base_y),
+            (right_x, right_y),
+            (right_x - 2, right_y - 4),
         ]
 
-        # 绘制蓝色模糊边缘 (3px)
+        # 蓝色模糊边缘 (3px)
         for offset in range(3, 0, -1):
             alpha = int(80 * offset / 3)
             scaled_points = []
@@ -88,60 +74,210 @@ class Win32Overlay:
                 scaled_points.append((int(cx + dx * scale), int(cy + dy * scale)))
             draw.polygon(scaled_points, fill=(80, 150, 255, alpha))
 
-        # 绘制白色填充
+        # 白色填充
         draw.polygon(arrow_points, fill=(255, 255, 255, 255))
 
         return img
 
     def _create_hicon(self, img: Image.Image) -> int:
-        """将 PIL Image 转换为 Windows HICON"""
-        # 转换 RGBA 到 BGRA
-        img_array = np.array(img)
-        if img_array.shape[2] == 4:
-            # BGRA
-            bgra = img_array[..., [2, 1, 0, 3]]
-        else:
-            bgra = img_array
+        """将 PIL RGBA 图像转换为 HICON"""
+        from ctypes import windll, c_short, c_uint, c_long, Structure, sizeof, c_void_p, byref, cast, POINTER
+        import struct
 
-        # 创建 DIB
-        hdc = win32gui.CreateCompatibleDC(0)
-        bmp = win32gui.CreateCompatibleBitmap(win32gui.GetDC(0), img.width, img.height)
-        win32gui.SelectObject(hdc, bmp)
+        size = 24
 
-        # 设置透明色
-        win32gui.SetBkColor(hdc, win32api.RGB(0, 0, 0))
-        win32gui.SetPixel(hdc, 0, 0, win32api.RGB(0, 0, 0))
+        logger.info(f"Starting _create_hicon, image size: {img.size}, mode: {img.mode}")
 
-        # 直接写入 bitmap
-        bmp_info = win32gui.CreateBitmap()
-        bmp_info.__dict__.update({
-            'bmType': 0,
-            'bmWidth': img.width,
-            'bmHeight': img.height,
-            'bmWidthBytes': img.width * 4,
-            'bmPlanes': 1,
-            'bmBitsPixel': 32,
-            'bmBits': bgra.tobytes()
-        })
+        # 首先保存 PNG 到临时文件，作为备用
+        temp_dir = tempfile.gettempdir()
+        png_path = os.path.join(temp_dir, "virtual_cursor.png")
+        img.save(png_path, format="PNG")
+        self._cursor_png_path = png_path
+        logger.info(f"Saved cursor PNG to: {png_path}")
 
-        # 使用 CreateIconIndirect
-        icon_info = win32gui.CreateIconIndirect()
-        icon_info.__dict__.update({
-            'hbmColor': bmp,
-            'hbmMask': bmp,
-            'fIcon': True,
-            'xHotspot': img.width // 2,
-            'yHotspot': img.height // 2,
-        })
+        # 创建 ICO 文件（PIL 不直接支持 ICO，但我们可以手动创建）
+        ico_path = os.path.join(temp_dir, "virtual_cursor.ico")
 
-        win32gui.DeleteDC(hdc)
-        return icon_info
+        # ICO Header: 6 bytes
+        # - Reserved (2 bytes): 0
+        # - Type (2 bytes): 1 for icon
+        # - Count (2 bytes): 1 image
+        ico_header = struct.pack('<HHH', 0, 1, 1)
+
+        # 准备 PNG 数据
+        png_data = open(png_path, 'rb').read()
+        png_size = len(png_data)
+
+        # ICO Directory Entry: 16 bytes
+        # - Width (1 byte): 0 means 256
+        # - Height (1 byte): 0 means 256
+        # - ColorCount (1 byte): 0 for 32bpp
+        # - Reserved (1 byte): 0
+        # - Planes (2 bytes): 1
+        # - BitCount (2 bytes): 32
+        # - BytesInRes (4 bytes): size of image data
+        # - ImageOffset (4 bytes): offset to image data (6 + 16 = 22)
+        ico_entry = struct.pack('<BBBBHHII', size, size, 0, 0, 1, 32, png_size, 22)
+
+        # 写入 ICO 文件
+        with open(ico_path, 'wb') as f:
+            f.write(ico_header)
+            f.write(ico_entry)
+            f.write(png_data)
+
+        logger.info(f"Created ICO file: {ico_path}, size: {os.path.getsize(ico_path)}")
+
+        # 尝试加载 ICO 文件
+        hicon = win32gui.LoadImage(
+            0,
+            ico_path,
+            win32con.IMAGE_ICON,
+            size, size,
+            win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+        )
+
+        if hicon:
+            logger.info(f"LoadImage from ICO success: {hicon}")
+            return hicon
+
+        # 如果失败，尝试方案2: 使用 CreateIconIndirect
+        logger.info("LoadImage from ICO failed, trying CreateIconIndirect...")
+
+        try:
+            # 准备 BGRA 数据（上下翻转，因为 DIB 是 bottom-up）
+            pixels = []
+            for y in range(size - 1, -1, -1):
+                for x in range(size):
+                    r, g, b, a = img.getpixel((x, y))
+                    # 转为 BGRA
+                    pixels.extend([b, g, r, a])
+
+            logger.info(f"Prepared {len(pixels)} bytes of pixel data")
+
+            # 使用 BITMAPINFO 结构
+            class RGBQUAD(Structure):
+                _fields_ = [('rgbBlue', c_uint), ('rgbGreen', c_uint), ('rgbRed', c_uint), ('rgbAlpha', c_uint)]
+
+            class BITMAPINFOHEADER(Structure):
+                _fields_ = [
+                    ('biSize', c_uint),
+                    ('biWidth', c_long),
+                    ('biHeight', c_long),
+                    ('biPlanes', c_short),
+                    ('biBitCount', c_short),
+                    ('biCompression', c_uint),
+                    ('biSizeImage', c_uint),
+                    ('biXPelsPerMeter', c_long),
+                    ('biYPelsPerMeter', c_long),
+                    ('biClrUsed', c_uint),
+                    ('biClrImportant', c_uint),
+                ]
+
+            # 创建颜色位图
+            bmi_color = BITMAPINFOHEADER()
+            bmi_color.biSize = 40  # 固定 40 bytes
+            bmi_color.biWidth = size
+            bmi_color.biHeight = size * 2  # 双倍高度：color + mask
+            bmi_color.biPlanes = 1
+            bmi_color.biBitCount = 32
+            bmi_color.biCompression = 0  # BI_RGB
+            bmi_color.biSizeImage = size * size * 4
+
+            hdc = windll.gdi32.CreateCompatibleDC(0)
+            logger.info(f"Created HDC: {hdc}")
+
+            ppvBits = c_void_p()
+            hbmColor = windll.gdi32.CreateDIBSection(hdc, byref(bmi_color), 0, byref(ppvBits), None, 0)
+            logger.info(f"CreateDIBSection color: hbmColor={hbmColor}")
+
+            if not hbmColor:
+                err = windll.kernel32.GetLastError()
+                logger.warning(f"CreateDIBSection color failed, error: {err}")
+                windll.gdi32.DeleteDC(hdc)
+                return 0
+
+            if not ppvBits or not ppvBits.value:
+                logger.warning("ppvBits is null")
+                windll.gdi32.DeleteObject(hbmColor)
+                windll.gdi32.DeleteDC(hdc)
+                return 0
+
+            # 复制像素数据到 DIB
+            img_size = size * size
+            pPixels = cast(ppvBits, POINTER(c_long * img_size)).contents
+            for i in range(img_size):
+                offset = i * 4
+                pPixels[i] = struct.unpack('<I', bytes(pixels[offset:offset+4]))[0]
+
+            logger.info("Copied pixel data to DIB")
+
+            # 创建 AND mask（全 0 表示全透明）
+            bmi_mask = BITMAPINFOHEADER()
+            bmi_mask.biSize = 40
+            bmi_mask.biWidth = size
+            bmi_mask.biHeight = size
+            bmi_mask.biPlanes = 1
+            bmi_mask.biBitCount = 1
+            bmi_mask.biCompression = 0
+            bmi_mask.biSizeImage = size * size // 8
+
+            ppvMask = c_void_p()
+            hbmMask = windll.gdi32.CreateDIBSection(hdc, byref(bmi_mask), 0, byref(ppvMask), None, 0)
+            logger.info(f"CreateDIBSection mask: hbmMask={hbmMask}")
+
+            # 将 mask 数据全部设为 1（表示全部不透明，由 color 的 alpha 决定）
+            if hbmMask and ppvMask and ppvMask.value:
+                from ctypes import c_ubyte
+                mask_size = size * size // 8
+                pMask = cast(ppvMask, POINTER(c_ubyte * mask_size)).contents
+                for i in range(mask_size):
+                    pMask[i] = 0xFF  # 全部设为 1（不透明）
+
+            # 创建 ICONINFO
+            class ICONINFO(Structure):
+                _fields_ = [
+                    ('fIcon', c_uint),
+                    ('xHotspot', c_uint),
+                    ('yHotspot', c_uint),
+                    ('hbmMask', c_void_p),
+                    ('hbmColor', c_void_p),
+                ]
+
+            ii = ICONINFO()
+            ii.fIcon = 0  # 鼠标指针
+            ii.xHotspot = 0
+            ii.yHotspot = 0
+            ii.hbmMask = hbmMask if hbmMask else None
+            ii.hbmColor = hbmColor
+
+            hicon = windll.user32.CreateIconIndirect(byref(ii))
+            logger.info(f"CreateIconIndirect returned: {hicon}")
+
+            if hicon:
+                logger.info(f"CreateIconIndirect SUCCESS: {hicon}")
+            else:
+                err = windll.kernel32.GetLastError()
+                logger.warning(f"CreateIconIndirect FAILED: error={err}")
+
+            if hbmMask:
+                windll.gdi32.DeleteObject(hbmMask)
+            windll.gdi32.DeleteObject(hbmColor)
+            windll.gdi32.DeleteDC(hdc)
+
+            if hicon:
+                return hicon
+
+        except Exception as e:
+            logger.warning(f"CreateIconIndirect exception: {e}")
+            import traceback
+            logger.warning(f"Traceback: {traceback.format_exc()}")
+
+        return 0
 
     def _create_window_class(self) -> str:
         """注册窗口类"""
         class_name = "VirtualCursorOverlay"
 
-        # 检查是否已注册
         try:
             win32gui.GetClassInfo(None, class_name)
             return class_name
@@ -151,114 +287,125 @@ class Win32Overlay:
         wc = win32gui.WNDCLASS()
         wc.lpfnWndProc = self._wnd_proc
         wc.lpszClassName = class_name
-        wc.hbrBackground = win32con.CreateSolidBrush(win32api.RGB(0, 0, 0))
-        wc.hCursor = 0  # 无光标
+        wc.hbrBackground = win32gui.CreateSolidBrush(win32api.RGB(0, 0, 0))
+        wc.hCursor = 0
 
-        atom = win32gui.RegisterClass(wc)
+        win32gui.RegisterClass(wc)
         return class_name
 
     def _wnd_proc(self, hwnd, msg, wparam, lparam):
-        """窗口消息处理"""
         if msg == win32con.WM_DESTROY:
             return 0
         elif msg == win32con.WM_PAINT:
             self._on_paint()
             return 0
+        elif msg == win32con.WM_ERASEBKGND:
+            return 1
         return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
 
     def _on_paint(self):
         """绘制光标"""
-        if not self._visible or not self.cursor_hicon:
+        if not self._visible:
             return
 
         hwnd = self.hwnd
         dc, ps = win32gui.BeginPaint(hwnd)
-        win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon, 24, 24, 0, None, win32con.DI_NORMAL)
+
+        # 如果有 cursor_hicon，用它绘制
+        if self.cursor_hicon:
+            win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon, 24, 24, 0, None, win32con.DI_NORMAL)
+        else:
+            # 尝试用 LoadImage 加载 ICO 文件
+            ico_path = os.path.join(tempfile.gettempdir(), "virtual_cursor.ico")
+            if os.path.exists(ico_path):
+                try:
+                    hicon = win32gui.LoadImage(
+                        0,
+                        ico_path,
+                        win32con.IMAGE_ICON,
+                        24, 24,
+                        win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+                    )
+                    if hicon:
+                        win32gui.DrawIconEx(dc, 0, 0, hicon, 24, 24, 0, None, win32con.DI_NORMAL)
+                        win32gui.DestroyIcon(hicon)
+                except Exception as e:
+                    logger.warning(f"LoadImage ICO failed: {e}")
+
         win32gui.EndPaint(hwnd, ps)
 
     def _ensure_window(self):
-        """确保覆盖层窗口已创建"""
         if self.hwnd != 0:
             return
 
         class_name = self._create_window_class()
 
-        # 获取屏幕尺寸
-        screen_w = win32api.GetSystemMetrics(win32con.SM_CXSCREEN)
-        screen_h = win32api.GetSystemMetrics(win32con.SM_CYSCREEN)
-
-        # 创建全屏最顶层窗口
         self.hwnd = win32gui.CreateWindowEx(
-            win32con.WS_EX_TOPMOST | win32con.WS_EX_LAYERED | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TRANSPARENT,
+            win32con.WS_EX_LAYERED | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TRANSPARENT | win32con.WS_EX_TOPMOST,
             class_name,
             "VirtualCursor",
             win32con.WS_POPUP,
-            0, 0, screen_w, screen_h,
+            0, 0, 24, 24,
             0, 0, 0, None
         )
 
-        # 设置透明色 (完全透明，只显示光标)
+        # 设置透明色键
         win32gui.SetLayeredWindowAttributes(self.hwnd, win32api.RGB(0, 0, 0), 0, win32con.LWA_COLORKEY)
 
-        # 创建光标图像和图标
-        self.cursor_img = self._create_cursor_image()
-        self.cursor_hicon = self._create_hicon(self.cursor_img)
+        # 创建光标图标
+        cursor_img = self._create_cursor_image()
+        self.cursor_hicon = self._create_hicon(cursor_img)
 
         # 初始隐藏
-        win32gui.ShowWindow(self.hwnd, win32con.SW_HIDE)
+        win32gui.SetWindowPos(
+            self.hwnd, win32con.HWND_TOPMOST,
+            -100, -100, 24, 24,
+            win32con.SWP_NOACTIVATE | win32con.SWP_HIDEWINDOW
+        )
 
     def show(self):
-        """显示覆盖层"""
         self._ensure_window()
         if self.hwnd:
             win32gui.ShowWindow(self.hwnd, win32con.SW_SHOWNOACTIVATE)
             self._visible = True
 
     def hide(self):
-        """隐藏覆盖层"""
         if self.hwnd:
             win32gui.ShowWindow(self.hwnd, win32con.SW_HIDE)
         self._visible = False
 
     def move_cursor(self, x: int, y: int):
-        """
-        移动虚拟光标到指定屏幕坐标
-        """
+        """移动虚拟光标到指定屏幕坐标"""
         self._ensure_window()
         if not self.hwnd:
             return
 
         self._pos = (x, y)
+        self._visible = True
 
-        # 移动窗口到光标位置（光标居中）
-        offset_x = x - 12
-        offset_y = y - 12
-
-        # WIN32API 只支持屏幕坐标
+        # 移动窗口到光标位置
         win32gui.SetWindowPos(
             self.hwnd,
             win32con.HWND_TOPMOST,
-            offset_x, offset_y, 24, 24,
+            x - 12, y - 12, 24, 24,
             win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
         )
 
-        # 强制重绘
-        win32gui.InvalidateRect(self.hwnd, None, True)
+        # 触发重绘
+        win32gui.InvalidateRect(self.hwnd, None, False)
+        win32gui.UpdateWindow(self.hwnd)
 
     def close(self):
-        """关闭覆盖层"""
         if self.hwnd:
             win32gui.DestroyWindow(self.hwnd)
             self.hwnd = 0
             self._visible = False
 
 
-# 全局单例
 _overlay: Optional[Win32Overlay] = None
 
 
 def get_overlay() -> Win32Overlay:
-    """获取全局覆盖层实例"""
     global _overlay
     if _overlay is None:
         _overlay = Win32Overlay.get_instance()
