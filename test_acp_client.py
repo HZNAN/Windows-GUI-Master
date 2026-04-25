@@ -6,45 +6,33 @@ import asyncio
 import json
 import sys
 
-import websockets
-
 sys.path.insert(0, ".")
 
 from core.acp.protocol import ACPProtocol
 from core.acp.types import ACPMethod
 
 
-def create_ws_headers(token: str) -> dict:
-    """创建 WebSocket headers（兼容不同版本 websockets）"""
-    if not token:
-        return {}
-    # websockets 12.0+ uses additional_headers, 10.x uses extra_headers
-    try:
-        import websockets
-        version = getattr(websockets, 'version', '0.0.0')
-        major = int(version.split('.')[0]) if version else 0
-        if major >= 12:
-            return {"additional_headers": {"Authorization": f"Bearer {token}"}}
-        else:
-            return {"extra_headers": {"Authorization": f"Bearer {token}"}}
-    except:
-        return {"extra_headers": {"Authorization": f"Bearer {token}"}}
+def create_ws_uri(host: str, port: int, token: str = "") -> tuple:
+    """创建 WebSocket URI 和 headers"""
+    uri = f"ws://{host}:{port}"
+    headers = None
+    if token:
+        # 创建一个简单的 Authorization header
+        headers = [("Authorization", f"Bearer {token}")]
+    return uri, headers
 
 
-async def ws_connect(uri: str, token: str = ""):
-    """创建 WebSocket 连接（兼容不同版本）"""
-    headers = create_ws_headers(token)
-    return await websockets.connect(uri, **headers)
-
-
-async def test_initialize(uri: str, token: str = ""):
+async def test_initialize(uri: str, headers: list = None):
     """测试 initialize (Standard ACP)"""
     print("\n" + "=" * 60)
     print("测试 1: initialize (Standard ACP)")
     print("=" * 60)
 
-    ws = await ws_connect(uri, token)
-    async with ws:
+    extra: dict = {"max_size": 10 * 1024 * 1024}
+    if headers:
+        extra["extra_headers"] = headers
+
+    async with __import__("websockets").connect(uri, **extra) as ws:
         msg = ACPProtocol.build_initialize(
             protocol_version="1.0",
             capabilities={
@@ -69,14 +57,17 @@ async def test_initialize(uri: str, token: str = ""):
             return False
 
 
-async def test_new_session(uri: str, token: str = ""):
+async def test_new_session(uri: str, headers: list = None):
     """测试 newSession (Standard ACP)"""
     print("\n" + "=" * 60)
     print("测试 2: newSession (Standard ACP)")
     print("=" * 60)
 
-    ws = await ws_connect(uri, token)
-    async with ws:
+    extra: dict = {"max_size": 10 * 1024 * 1024}
+    if headers:
+        extra["extra_headers"] = headers
+
+    async with __import__("websockets").connect(uri, **extra) as ws:
         msg = ACPProtocol.build_new_session(
             session_id=None,
             cwd="/test/workspace",
@@ -97,14 +88,17 @@ async def test_new_session(uri: str, token: str = ""):
             return None
 
 
-async def test_prompt(uri: str, token: str = ""):
+async def test_prompt(uri: str, headers: list = None):
     """测试 prompt (Standard ACP)"""
     print("\n" + "=" * 60)
     print("测试 3: prompt (Standard ACP)")
     print("=" * 60)
 
-    ws = await ws_connect(uri, token)
-    async with ws:
+    extra: dict = {"max_size": 10 * 1024 * 1024}
+    if headers:
+        extra["extra_headers"] = headers
+
+    async with __import__("websockets").connect(uri, **extra) as ws:
         msg = ACPProtocol.build_prompt(
             prompt="Hello, this is a test prompt",
             system_prompt="You are a test agent",
@@ -125,14 +119,17 @@ async def test_prompt(uri: str, token: str = ""):
             return False
 
 
-async def test_ping(uri: str, token: str = ""):
+async def test_ping(uri: str, headers: list = None):
     """测试 ping (扩展方法)"""
     print("\n" + "=" * 60)
     print("测试 4: ping (扩展方法)")
     print("=" * 60)
 
-    ws = await ws_connect(uri, token)
-    async with ws:
+    extra: dict = {"max_size": 10 * 1024 * 1024}
+    if headers:
+        extra["extra_headers"] = headers
+
+    async with __import__("websockets").connect(uri, **extra) as ws:
         msg = ACPProtocol.build_request(
             method=ACPMethod.PING.value,
             params={},
@@ -153,14 +150,17 @@ async def test_ping(uri: str, token: str = ""):
             return False
 
 
-async def test_execute(uri: str, token: str = ""):
+async def test_execute(uri: str, headers: list = None):
     """测试 agent.execute (扩展方法)"""
     print("\n" + "=" * 60)
     print("测试 5: agent.execute (扩展方法)")
     print("=" * 60)
 
-    ws = await ws_connect(uri, token)
-    async with ws:
+    extra: dict = {"max_size": 10 * 1024 * 1024}
+    if headers:
+        extra["extra_headers"] = headers
+
+    async with __import__("websockets").connect(uri, **extra) as ws:
         msg = ACPProtocol.build_execute(
             action="server.info",
             params={},
@@ -181,14 +181,17 @@ async def test_execute(uri: str, token: str = ""):
             return False
 
 
-async def test_invalid_method(uri: str, token: str = ""):
+async def test_invalid_method(uri: str, headers: list = None):
     """测试无效方法"""
     print("\n" + "=" * 60)
     print("测试 6: 无效方法")
     print("=" * 60)
 
-    ws = await ws_connect(uri, token)
-    async with ws:
+    extra: dict = {"max_size": 10 * 1024 * 1024}
+    if headers:
+        extra["extra_headers"] = headers
+
+    async with __import__("websockets").connect(uri, **extra) as ws:
         msg = ACPProtocol.build_request(
             method="invalid.method",
             params={},
@@ -217,27 +220,26 @@ async def run_all_tests():
     load_dotenv()
 
     host = os.getenv("ACP_HOST", "localhost")
-    port = os.getenv("ACP_PORT", "8765")
+    port = int(os.getenv("ACP_PORT", "8765"))
     token = os.getenv("ACP_TOKEN", "")
 
-    uri = f"ws://{host}:{port}"
+    uri, headers = create_ws_uri(host, port, token)
 
     print("=" * 60)
     print("ACP 协议测试客户端")
     print("=" * 60)
     print(f"目标地址: {uri}")
     print(f"Token: {'已配置' if token else '未配置'}")
-    print(f"websockets 版本: {websockets.version}")
 
     results = []
 
     # Standard ACP 测试
-    results.append(("initialize", await test_initialize(uri, token)))
-    results.append(("newSession", await test_new_session(uri, token)))
-    results.append(("prompt", await test_prompt(uri, token)))
-    results.append(("ping", await test_ping(uri, token)))
-    results.append(("agent.execute", await test_execute(uri, token)))
-    results.append(("invalid method", await test_invalid_method(uri, token)))
+    results.append(("initialize", await test_initialize(uri, headers)))
+    results.append(("newSession", await test_new_session(uri, headers)))
+    results.append(("prompt", await test_prompt(uri, headers)))
+    results.append(("ping", await test_ping(uri, headers)))
+    results.append(("agent.execute", await test_execute(uri, headers)))
+    results.append(("invalid method", await test_invalid_method(uri, headers)))
 
     # 汇总
     print("\n" + "=" * 60)
