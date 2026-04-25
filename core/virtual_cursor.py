@@ -111,7 +111,6 @@ class VirtualCursor:
             x, y: 目标屏幕坐标
             callback: 移动完成后的回调函数
         """
-        logger.info(f"[VC] 配置: fps={self.fps}, duration={self.duration}, frames={int(self.duration*self.fps)}")
         with self._lock:
             if self._running:
                 # 正在移动，先停止
@@ -161,12 +160,8 @@ class VirtualCursor:
             # 移动光标（UpdateWindow 同步等待重绘完成）
             self.overlay.move_cursor(final_x, final_y)
 
-            # 计算实际花费的时间
+            # 计算实际花费的时间，动态调整等待时间
             elapsed = time.perf_counter() - start_time
-            # 诊断日志（前3帧打印）
-            if frame < 3:
-                logger.info(f"[VC] 帧{frame}: move={elapsed*1000:.2f}ms, target={frame_duration*1000:.2f}ms, remaining={max(0, frame_duration-elapsed)*1000:.2f}ms")
-            # 动态调整等待时间：如果重绘花了 5ms，我们只需要等 frame_duration - 5ms
             remaining = frame_duration - elapsed
             if remaining > 0:
                 time.sleep(remaining)
