@@ -133,12 +133,20 @@ Client (控制端/飞书机器人) ←WebSocket + Token→ Server (本项目)
 
 ## Implementation Status
 
-### 待实现
+### 已完成 (2026-04-25)
 
-- [ ] `core/acp/protocol.py` — 消息定义、编解码
-- [ ] `core/acp/server.py` — WebSocket 服务端
-- [ ] `core/acp/auth.py` — Token 认证
-- [ ] `core/acp/types.py` — 数据类型定义
+- [x] `core/acp/types.py` — ACPMessage, ACPMethod, ACPErrorCode 等数据类型定义
+- [x] `core/acp/protocol.py` — JSON-RPC 2.0 消息编解码、验证
+- [x] `core/acp/auth.py` — Bearer Token 认证
+- [x] `core/acp/server.py` — WebSocket 服务端，支持确认/参数补全/求助请求
+
+### 配置项 (.env)
+
+```bash
+ACP_HOST = "localhost"
+ACP_PORT = 8765
+ACP_TOKEN = ""  # Bearer token，为空则禁用认证
+```
 
 ### 暂不实现
 
