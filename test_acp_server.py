@@ -15,6 +15,35 @@ from loguru import logger
 class TestHandler(ACPHandler):
     """测试用 ACP 处理器"""
 
+    async def on_initialize(self, client_info: dict, capabilities: dict) -> dict:
+        """处理 initialize"""
+        logger.info(f"Client initializing: {client_info}, capabilities: {capabilities}")
+        return {
+            "name": "feishu-agent-test",
+            "version": "1.0.0",
+        }
+
+    async def on_new_session(self, session_id: str | None, cwd: str) -> dict:
+        """处理 newSession"""
+        import uuid
+        session_id = session_id or str(uuid.uuid4())
+        logger.info(f"New session: {session_id}, cwd: {cwd}")
+        return {"sessionId": session_id}
+
+    async def on_load_session(self, session_id: str) -> dict:
+        """处理 loadSession"""
+        logger.info(f"Load session: {session_id}")
+        return {"sessionId": session_id}
+
+    async def on_prompt(self, session_id: str, prompt: str, system_prompt: str | None) -> dict:
+        """处理 prompt"""
+        logger.info(f"Prompt received: {prompt[:50]}...")
+        return {
+            "sessionId": session_id,
+            "stopReason": "completed",
+            "message": f"Echo: {prompt}",
+        }
+
     async def on_execute(self, action: str, params: dict) -> dict:
         """处理 agent.execute"""
         logger.info(f"收到执行指令: action={action}, params={params}")

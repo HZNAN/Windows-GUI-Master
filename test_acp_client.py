@@ -1,24 +1,21 @@
 """
 ACP 协议测试客户端
-用于测试 ACP Server 是否正常工作
+测试 Standard ACP 兼容性和扩展方法
 """
 import asyncio
 import json
 import sys
 
-import websockets
-
-# 添加项目根目录到路径
 sys.path.insert(0, ".")
 
-from core.acp.types import ACPMessage, ACPMethod, ACPErrorCode
 from core.acp.protocol import ACPProtocol
+from core.acp.types import ACPMethod
 
 
-async def test_server_info(uri: str, token: str = ""):
-    """测试获取服务器信息"""
+async def test_initialize(uri: str, token: str = ""):
+    """测试 initialize (Standard ACP)"""
     print("\n" + "=" * 60)
-    print("测试 1: 获取服务器信息 (agent.execute)")
+    print("测试 1: initialize (Standard ACP)")
     print("=" * 60)
 
     headers = {}
@@ -26,74 +23,14 @@ async def test_server_info(uri: str, token: str = ""):
         headers["Authorization"] = f"Bearer {token}"
 
     async with websockets.connect(uri, additional_headers=headers) as ws:
-        # 发送 execute 请求
-        msg = ACPProtocol.build_execute(
-            action="server.info",
-            params={},
-            msg_id="test_001",
-        )
-        await ws.send(ACPProtocol.encode(msg))
-        print(f"发送: {ACPProtocol.encode(msg)}")
-
-        # 接收响应
-        response = await ws.recv()
-        print(f"接收: {response}")
-
-        data = json.loads(response)
-        if data.get("result"):
-            print("✅ 测试通过")
-            return True
-        else:
-            print("❌ 测试失败")
-            return False
-
-
-async def test_confirm_request(uri: str, token: str = ""):
-    """测试确认请求 (Server -> Client)"""
-    print("\n" + "=" * 60)
-    print("测试 2: 模拟 Server 发送确认请求")
-    print("=" * 60)
-
-    # 这个测试需要 Server 支持模拟确认请求
-    # 先发送一个特殊的测试请求
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
-        msg = ACPProtocol.build_request(
-            method="test.confirm_flow",
-            params={"test": True},
-            msg_id="test_002",
-        )
-        await ws.send(ACPProtocol.encode(msg))
-        print(f"发送: {ACPProtocol.encode(msg)}")
-
-        try:
-            response = await asyncio.wait_for(ws.recv(), timeout=5)
-            print(f"接收: {response}")
-            print("✅ 测试通过")
-            return True
-        except asyncio.TimeoutError:
-            print("⏰ 等待超时（可能 Server 不支持此测试）")
-            return False
-
-
-async def test_invalid_method(uri: str, token: str = ""):
-    """测试无效方法"""
-    print("\n" + "=" * 60)
-    print("测试 3: 发送无效方法")
-    print("=" * 60)
-
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
-        msg = ACPProtocol.build_request(
-            method="invalid.method",
-            params={},
-            msg_id="test_003",
+        msg = ACPProtocol.build_initialize(
+            protocol_version="1.0",
+            capabilities={
+                "fs": {"readTextFile": True, "writeTextFile": True},
+                "terminal": True,
+            },
+            client_info={"name": "test-client", "version": "1.0.0"},
+            msg_id="init_001",
         )
         await ws.send(ACPProtocol.encode(msg))
         print(f"发送: {ACPProtocol.encode(msg)}")
@@ -102,18 +39,80 @@ async def test_invalid_method(uri: str, token: str = ""):
         print(f"接收: {response}")
 
         data = json.loads(response)
-        if data.get("error") and data["error"].get("code") == -32003:
-            print("✅ 测试通过 (正确返回 INVALID_PARAMS 错误)")
+        if data.get("result", {}).get("protocolVersion"):
+            print("✅ initialize 成功")
             return True
         else:
-            print("❌ 测试失败")
+            print("❌ initialize 失败")
+            return False
+
+
+async def test_new_session(uri: str, token: str = ""):
+    """测试 newSession (Standard ACP)"""
+    print("\n" + "=" * 60)
+    print("测试 2: newSession (Standard ACP)")
+    print("=" * 60)
+
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with websockets.connect(uri, additional_headers=headers) as ws:
+        msg = ACPProtocol.build_new_session(
+            session_id=None,
+            cwd="/test/workspace",
+            msg_id="sess_001",
+        )
+        await ws.send(ACPProtocol.encode(msg))
+        print(f"发送: {ACPProtocol.encode(msg)}")
+
+        response = await ws.recv()
+        print(f"接收: {response}")
+
+        data = json.loads(response)
+        if data.get("result", {}).get("sessionId"):
+            print(f"✅ newSession 成功, sessionId: {data['result']['sessionId']}")
+            return data["result"]["sessionId"]
+        else:
+            print("❌ newSession 失败")
+            return None
+
+
+async def test_prompt(uri: str, token: str = ""):
+    """测试 prompt (Standard ACP)"""
+    print("\n" + "=" * 60)
+    print("测试 3: prompt (Standard ACP)")
+    print("=" * 60)
+
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with websockets.connect(uri, additional_headers=headers) as ws:
+        msg = ACPProtocol.build_prompt(
+            prompt="Hello, this is a test prompt",
+            system_prompt="You are a test agent",
+            msg_id="prompt_001",
+        )
+        await ws.send(ACPProtocol.encode(msg))
+        print(f"发送: {ACPProtocol.encode(msg)}")
+
+        response = await ws.recv()
+        print(f"接收: {response}")
+
+        data = json.loads(response)
+        if data.get("result", {}).get("message"):
+            print("✅ prompt 成功")
+            return True
+        else:
+            print("❌ prompt 失败")
             return False
 
 
 async def test_ping(uri: str, token: str = ""):
-    """测试 ping"""
+    """测试 ping (扩展方法)"""
     print("\n" + "=" * 60)
-    print("测试 4: Ping 测试")
+    print("测试 4: ping (扩展方法)")
     print("=" * 60)
 
     headers = {}
@@ -124,7 +123,7 @@ async def test_ping(uri: str, token: str = ""):
         msg = ACPProtocol.build_request(
             method=ACPMethod.PING.value,
             params={},
-            msg_id="test_004",
+            msg_id="ping_001",
         )
         await ws.send(ACPProtocol.encode(msg))
         print(f"发送: {ACPProtocol.encode(msg)}")
@@ -134,44 +133,81 @@ async def test_ping(uri: str, token: str = ""):
 
         data = json.loads(response)
         if data.get("result", {}).get("pong"):
-            print("✅ 测试通过")
+            print("✅ ping 成功")
             return True
         else:
-            print("❌ 测试失败")
+            print("❌ ping 失败")
             return False
 
 
-async def test_auth_without_token(uri: str):
-    """测试无 Token 认证"""
+async def test_execute(uri: str, token: str = ""):
+    """测试 agent.execute (扩展方法)"""
     print("\n" + "=" * 60)
-    print("测试 5: 无 Token 认证 (预期失败)")
+    print("测试 5: agent.execute (扩展方法)")
     print("=" * 60)
 
-    try:
-        async with websockets.connect(uri) as ws:
-            msg = ACPProtocol.build_request(
-                method=ACPMethod.PING.value,
-                params={},
-                msg_id="test_005",
-            )
-            await ws.send(ACPProtocol.encode(msg))
-            response = await asyncio.wait_for(ws.recv(), timeout=5)
-            print(f"接收: {response}")
-            print("⚠️  未启用认证或认证未生效")
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with websockets.connect(uri, additional_headers=headers) as ws:
+        msg = ACPProtocol.build_execute(
+            action="server.info",
+            params={},
+            msg_id="exec_001",
+        )
+        await ws.send(ACPProtocol.encode(msg))
+        print(f"发送: {ACPProtocol.encode(msg)}")
+
+        response = await ws.recv()
+        print(f"接收: {response}")
+
+        data = json.loads(response)
+        if data.get("result", {}).get("name"):
+            print("✅ agent.execute 成功")
+            return True
+        else:
+            print("❌ agent.execute 失败")
             return False
-    except websockets.exceptions.InvalidStatusCode as e:
-        print(f"✅ 测试通过 (Server 拒绝了无效请求: status={e.status_code})")
-        return True
-    except Exception as e:
-        print(f"❌ 测试失败: {e}")
-        return False
+
+
+async def test_invalid_method(uri: str, token: str = ""):
+    """测试无效方法"""
+    print("\n" + "=" * 60)
+    print("测试 6: 无效方法")
+    print("=" * 60)
+
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with websockets.connect(uri, additional_headers=headers) as ws:
+        msg = ACPProtocol.build_request(
+            method="invalid.method",
+            params={},
+            msg_id="invalid_001",
+        )
+        await ws.send(ACPProtocol.encode(msg))
+        print(f"发送: {ACPProtocol.encode(msg)}")
+
+        response = await ws.recv()
+        print(f"接收: {response}")
+
+        data = json.loads(response)
+        if data.get("error", {}).get("code") == -32003:
+            print("✅ 正确返回 INVALID_PARAMS 错误")
+            return True
+        else:
+            print("❌ 错误处理失败")
+            return False
 
 
 async def run_all_tests():
     """运行所有测试"""
-    # 从环境变量或使用默认值
     import os
+    import websockets
     from dotenv import load_dotenv
+
     load_dotenv()
 
     host = os.getenv("ACP_HOST", "localhost")
@@ -188,12 +224,13 @@ async def run_all_tests():
 
     results = []
 
-    # 运行测试
-    results.append(("Server Info", await test_server_info(uri, token)))
-    results.append(("Confirm Flow", await test_confirm_request(uri, token)))
-    results.append(("Invalid Method", await test_invalid_method(uri, token)))
-    results.append(("Ping", await test_ping(uri, token)))
-    results.append(("Auth Without Token", await test_auth_without_token(uri)))
+    # Standard ACP 测试
+    results.append(("initialize", await test_initialize(uri, token)))
+    results.append(("newSession", await test_new_session(uri, token)))
+    results.append(("prompt", await test_prompt(uri, token)))
+    results.append(("ping", await test_ping(uri, token)))
+    results.append(("agent.execute", await test_execute(uri, token)))
+    results.append(("invalid method", await test_invalid_method(uri, token)))
 
     # 汇总
     print("\n" + "=" * 60)
