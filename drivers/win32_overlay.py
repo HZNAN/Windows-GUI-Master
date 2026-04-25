@@ -452,8 +452,9 @@ class Win32Overlay:
             win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
         )
 
-        # 触发重绘
+        # 强制立即重绘（同步等待）
         win32gui.InvalidateRect(self.hwnd, None, False)
+        win32gui.UpdateWindow(self.hwnd)  # 阻塞直到 WM_PAINT 处理完成
 
     def close(self):
         if self.hwnd:

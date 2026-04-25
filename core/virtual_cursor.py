@@ -111,6 +111,7 @@ class VirtualCursor:
             x, y: 目标屏幕坐标
             callback: 移动完成后的回调函数
         """
+        logger.info(f"[VC] 配置: fps={self.fps}, duration={self.duration}, frames={int(self.duration*self.fps)}")
         with self._lock:
             if self._running:
                 # 正在移动，先停止
@@ -133,6 +134,7 @@ class VirtualCursor:
 
         # 执行动画
         self._running = True
+        frame_duration = 1.0 / self.fps
 
         for frame in range(total_frames + 1):
             if not self._running:
@@ -152,15 +154,22 @@ class VirtualCursor:
             final_x = int(px * t_eased + actual_x * (1 - t_eased))
             final_y = int(py * t_eased + actual_y * (1 - t_eased))
 
-            # 更新位置
+            # 更新时间
             self._current_pos = (final_x, final_y)
+            start_time = time.perf_counter()
+
+            # 移动光标（UpdateWindow 同步等待重绘完成）
             self.overlay.move_cursor(final_x, final_y)
 
-            # 处理 Windows 消息（保持窗口响应）
-            self._pump_messages()
-
-            # 等待下一帧
-            time.sleep(1.0 / self.fps)
+            # 计算实际花费的时间
+            elapsed = time.perf_counter() - start_time
+            # 诊断日志（前3帧打印）
+            if frame < 3:
+                logger.info(f"[VC] 帧{frame}: move={elapsed*1000:.2f}ms, target={frame_duration*1000:.2f}ms, remaining={max(0, frame_duration-elapsed)*1000:.2f}ms")
+            # 动态调整等待时间：如果重绘花了 5ms，我们只需要等 frame_duration - 5ms
+            remaining = frame_duration - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
 
         self._running = False
         self._current_pos = (x, y)
@@ -210,5 +219,10 @@ def get_virtual_cursor() -> VirtualCursor:
     global _virtual_cursor
     with _cursor_lock:
         if _virtual_cursor is None:
-            _virtual_cursor = VirtualCursor(amplitude=15, duration=1.0, fps=60)
+            from config.settings import VIRTUAL_CURSOR_AMPLITUDE, VIRTUAL_CURSOR_DURATION, VIRTUAL_CURSOR_FPS
+            _virtual_cursor = VirtualCursor(
+                amplitude=VIRTUAL_CURSOR_AMPLITUDE,
+                duration=VIRTUAL_CURSOR_DURATION,
+                fps=VIRTUAL_CURSOR_FPS
+            )
         return _virtual_cursor
