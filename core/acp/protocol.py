@@ -209,3 +209,141 @@ class ACPProtocol:
             params={"request_id": request_id, "result": result},
             msg_id=request_id,
         )
+
+    # ===== Standard ACP Method Builders =====
+
+    @classmethod
+    def build_initialize(
+        cls,
+        protocol_version: str,
+        capabilities: dict,
+        client_info: dict,
+        msg_id: str,
+    ) -> ACPMessage:
+        """构建 initialize 请求 (Client -> Server)"""
+        return cls.build_request(
+            method=ACPMethod.INITIALIZE.value,
+            params={
+                "protocolVersion": protocol_version,
+                "capabilities": capabilities,
+                "clientInfo": client_info,
+            },
+            msg_id=msg_id,
+        )
+
+    @classmethod
+    def build_initialize_response(
+        cls,
+        msg_id: str,
+        protocol_version: str,
+        capabilities: dict,
+        server_info: dict,
+    ) -> ACPMessage:
+        """构建 initialize 响应 (Server -> Client)"""
+        return cls.build_response(
+            msg_id=msg_id,
+            result={
+                "protocolVersion": protocol_version,
+                "capabilities": capabilities,
+                "serverInfo": server_info,
+            },
+        )
+
+    @classmethod
+    def build_new_session(
+        cls,
+        session_id: Optional[str] = None,
+        cwd: str = "",
+        msg_id: Optional[str] = None,
+    ) -> ACPMessage:
+        """构建 newSession 请求 (Client -> Server)"""
+        params = {}
+        if session_id:
+            params["sessionId"] = session_id
+        if cwd:
+            params["cwd"] = cwd
+        return cls.build_request(
+            method=ACPMethod.NEW_SESSION.value,
+            params=params if params else None,
+            msg_id=msg_id,
+        )
+
+    @classmethod
+    def build_new_session_response(
+        cls,
+        msg_id: str,
+        session_id: str,
+    ) -> ACPMessage:
+        """构建 newSession 响应 (Server -> Client)"""
+        return cls.build_response(
+            msg_id=msg_id,
+            result={"sessionId": session_id},
+        )
+
+    @classmethod
+    def build_load_session(
+        cls,
+        session_id: str,
+        msg_id: Optional[str] = None,
+    ) -> ACPMessage:
+        """构建 loadSession 请求 (Client -> Server)"""
+        return cls.build_request(
+            method=ACPMethod.LOAD_SESSION.value,
+            params={"sessionId": session_id},
+            msg_id=msg_id,
+        )
+
+    @classmethod
+    def build_prompt(
+        cls,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        msg_id: Optional[str] = None,
+    ) -> ACPMessage:
+        """构建 prompt 请求 (Client -> Server)"""
+        params = {"prompt": prompt}
+        if system_prompt:
+            params["systemPrompt"] = system_prompt
+        return cls.build_request(
+            method=ACPMethod.PROMPT.value,
+            params=params,
+            msg_id=msg_id,
+        )
+
+    @classmethod
+    def build_prompt_response(
+        cls,
+        msg_id: str,
+        session_id: str,
+        stop_reason: str,
+        message: Any,
+    ) -> ACPMessage:
+        """构建 prompt 响应 (Server -> Client)"""
+        return cls.build_response(
+            msg_id=msg_id,
+            result={
+                "sessionId": session_id,
+                "stopReason": stop_reason,
+                "message": message,
+            },
+        )
+
+    @classmethod
+    def build_session_update(
+        cls,
+        session_id: str,
+        update_type: str,
+        content: Any,
+    ) -> ACPMessage:
+        """构建 sessionUpdate 通知 (Server -> Client, 无需响应)"""
+        return ACPMessage(
+            jsonrpc=ACPProtocol.VERSION,
+            method=ACPMethod.SESSION_UPDATE.value,
+            params={
+                "sessionId": session_id,
+                "update": {
+                    "type": update_type,
+                    "content": content,
+                },
+            },
+        )

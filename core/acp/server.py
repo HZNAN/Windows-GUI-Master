@@ -1,7 +1,9 @@
 """
 ACP WebSocket 服务端
+支持 Standard ACP + 扩展方法
 """
 import asyncio
+import time
 import uuid
 from typing import Callable, Optional
 from dataclasses import dataclass, field
@@ -25,8 +27,38 @@ class PendingRequest:
     timeout: float = 30.0
 
 
+@dataclass
+class ACPSessionState:
+    """会话状态"""
+
+    session_id: str
+    cwd: str = ""
+    created_at: float = 0.0
+    last_active: float = 0.0
+    initialized: bool = False
+
+
 class ACPHandler:
     """ACP 消息处理器基类"""
+
+    async def on_initialize(self, client_info: dict, capabilities: dict) -> dict:
+        """处理 initialize (Client -> Server)"""
+        return {
+            "name": "feishu-agent",
+            "version": "1.0.0",
+        }
+
+    async def on_new_session(self, session_id: str | None, cwd: str) -> dict:
+        """处理 newSession (Client -> Server)"""
+        raise NotImplementedError
+
+    async def on_load_session(self, session_id: str) -> dict:
+        """处理 loadSession (Client -> Server)"""
+        raise NotImplementedError
+
+    async def on_prompt(self, session_id: str, prompt: str, system_prompt: str | None) -> dict:
+        """处理 prompt (Client -> Server)"""
+        raise NotImplementedError
 
     async def on_execute(self, action: str, params: dict) -> dict:
         """处理 agent.execute (Client -> Server)"""
@@ -36,9 +68,20 @@ class ACPHandler:
         """处理主动推送"""
         pass
 
+    async def send_session_update(self, websocket, session_id: str, update_type: str, content):
+        """发送 sessionUpdate 通知"""
+        msg = ACPProtocol.build_session_update(
+            session_id=session_id,
+            update_type=update_type,
+            content=content,
+        )
+        await websocket.send(ACPProtocol.encode(msg))
+
 
 class ACPServer:
     """ACP WebSocket 服务端"""
+
+    PROTOCOL_VERSION = "1.0"
 
     def __init__(
         self,
@@ -52,6 +95,8 @@ class ACPServer:
         self.auth = ACPAuth(token=token)
         self.handler = handler or ACPHandler()
         self._pending_requests: dict[str, PendingRequest] = {}
+        self._sessions: dict[str, ACPSessionState] = {}
+        self._current_session: Optional[ACPSessionState] = None
         self._server = None
         self._running = False
 
@@ -117,6 +162,15 @@ class ACPServer:
             await self._handle_cancel(ws, msg)
         elif msg.method == ACPMethod.PING.value:
             await self._handle_ping(ws, msg)
+        # Standard ACP methods
+        elif msg.method == ACPMethod.INITIALIZE.value:
+            await self._handle_initialize(ws, msg)
+        elif msg.method == ACPMethod.NEW_SESSION.value:
+            await self._handle_new_session(ws, msg)
+        elif msg.method == ACPMethod.LOAD_SESSION.value:
+            await self._handle_load_session(ws, msg)
+        elif msg.method == ACPMethod.PROMPT.value:
+            await self._handle_prompt(ws, msg)
         else:
             error = ACPProtocol.build_error(
                 msg.id, ACPErrorCode.INVALID_PARAMS, f"Unknown method: {msg.method}"
@@ -176,6 +230,135 @@ class ACPServer:
         """处理 agent.ping"""
         response = ACPProtocol.build_response(msg.id, result={"pong": True})
         await ws.send(ACPProtocol.encode(response))
+
+    async def _handle_initialize(self, ws: WebSocketServerProtocol, msg: ACPMessage):
+        """处理 initialize (Standard ACP)"""
+        try:
+            params = msg.params or {}
+            protocol_version = params.get("protocolVersion", self.PROTOCOL_VERSION)
+            capabilities = params.get("capabilities", {})
+            client_info = params.get("clientInfo", {})
+
+            server_info = await self.handler.on_initialize(client_info, capabilities)
+
+            response = ACPProtocol.build_initialize_response(
+                msg_id=msg.id,
+                protocol_version=protocol_version,
+                capabilities={
+                    "execute": True,
+                    "confirm": True,
+                    "push": True,
+                },
+                server_info=server_info,
+            )
+            await ws.send(ACPProtocol.encode(response))
+
+            logger.info(f"Client initialized: {client_info.get('name', 'unknown')}")
+
+        except Exception as e:
+            error = ACPProtocol.build_error(
+                msg.id, ACPErrorCode.EXECUTION_FAILED, str(e)
+            )
+            await ws.send(ACPProtocol.encode(error))
+
+    async def _handle_new_session(self, ws: WebSocketServerProtocol, msg: ACPMessage):
+        """处理 newSession (Standard ACP)"""
+        try:
+            params = msg.params or {}
+            session_id = params.get("sessionId")
+            cwd = params.get("cwd", "")
+
+            result = await self.handler.on_new_session(session_id, cwd)
+            session_id = result.get("sessionId", str(uuid.uuid4()))
+
+            session_state = ACPSessionState(
+                session_id=session_id,
+                cwd=cwd,
+                created_at=time.time(),
+                last_active=time.time(),
+                initialized=True,
+            )
+            self._sessions[session_id] = session_state
+            self._current_session = session_state
+
+            response = ACPProtocol.build_new_session_response(
+                msg_id=msg.id,
+                session_id=session_id,
+            )
+            await ws.send(ACPProtocol.encode(response))
+
+            logger.info(f"New session created: {session_id}")
+
+        except Exception as e:
+            error = ACPProtocol.build_error(
+                msg.id, ACPErrorCode.EXECUTION_FAILED, str(e)
+            )
+            await ws.send(ACPProtocol.encode(error))
+
+    async def _handle_load_session(self, ws: WebSocketServerProtocol, msg: ACPMessage):
+        """处理 loadSession (Standard ACP)"""
+        try:
+            params = msg.params or {}
+            session_id = params.get("sessionId")
+
+            if not session_id:
+                error = ACPProtocol.build_error(
+                    msg.id,
+                    ACPErrorCode.INVALID_PARAMS,
+                    "Missing 'sessionId' in params",
+                )
+                await ws.send(ACPProtocol.encode(error))
+                return
+
+            session = self._sessions.get(session_id)
+            if not session:
+                error = ACPProtocol.build_error(
+                    msg.id,
+                    ACPErrorCode.INVALID_PARAMS,
+                    f"Session not found: {session_id}",
+                )
+                await ws.send(ACPProtocol.encode(error))
+                return
+
+            session.last_active = time.time()
+            self._current_session = session
+
+            result = await self.handler.on_load_session(session_id)
+            response = ACPProtocol.build_response(msg.id, result=result)
+            await ws.send(ACPProtocol.encode(response))
+
+            logger.info(f"Session loaded: {session_id}")
+
+        except Exception as e:
+            error = ACPProtocol.build_error(
+                msg.id, ACPErrorCode.EXECUTION_FAILED, str(e)
+            )
+            await ws.send(ACPProtocol.encode(error))
+
+    async def _handle_prompt(self, ws: WebSocketServerProtocol, msg: ACPMessage):
+        """处理 prompt (Standard ACP)"""
+        try:
+            params = msg.params or {}
+            prompt_text = params.get("prompt", "")
+            system_prompt = params.get("systemPrompt")
+
+            session_id = self._current_session.session_id if self._current_session else "default"
+
+            result = await self.handler.on_prompt(session_id, prompt_text, system_prompt)
+
+            response = ACPProtocol.build_prompt_response(
+                msg_id=msg.id,
+                session_id=session_id,
+                stop_reason=result.get("stopReason", "completed"),
+                message=result.get("message", ""),
+            )
+            await ws.send(ACPProtocol.encode(response))
+
+        except Exception as e:
+            error = ACPProtocol.build_error(
+                msg.id, ACPErrorCode.EXECUTION_FAILED, str(e)
+            )
+            await ws.send(ACPProtocol.encode(error))
 
     def _cleanup_client(self, client_id: str):
         """清理客户端相关的待处理请求"""

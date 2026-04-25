@@ -9,6 +9,14 @@ from typing import Any, Optional
 class ACPMethod(str, Enum):
     """ACP 方法名枚举"""
 
+    # ===== Standard ACP (Zed Industries) =====
+    INITIALIZE = "initialize"
+    NEW_SESSION = "newSession"
+    LOAD_SESSION = "loadSession"
+    PROMPT = "prompt"
+    SESSION_UPDATE = "sessionUpdate"
+
+    # ===== Extended Methods (我们的扩展) =====
     # Server -> Client
     CONFIRM = "agent.confirm"
     REQUEST_PARAM = "agent.request_param"
@@ -117,3 +125,102 @@ class ACPPushParams:
 
     type: str  # screenshot | status | progress | log
     data: dict
+
+
+# ===== Standard ACP Types =====
+
+
+@dataclass
+class ACPCapabilities:
+    """客户端/服务端能力"""
+
+    execute: bool = False
+    confirm: bool = False
+    push: bool = False
+    fs_read_text_file: bool = False
+    fs_write_text_file: bool = False
+    terminal: bool = False
+
+    def to_dict(self) -> dict:
+        caps = {}
+        if self.execute:
+            caps["execute"] = True
+        if self.confirm:
+            caps["confirm"] = True
+        if self.push:
+            caps["push"] = True
+        if self.fs_read_text_file or self.fs_write_text_file:
+            caps["fs"] = {}
+            if self.fs_read_text_file:
+                caps["fs"]["readTextFile"] = True
+            if self.fs_write_text_file:
+                caps["fs"]["writeTextFile"] = True
+        if self.terminal:
+            caps["terminal"] = True
+        return caps
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ACPCapabilities":
+        caps = cls()
+        caps.execute = data.get("execute", False)
+        caps.confirm = data.get("confirm", False)
+        caps.push = data.get("push", False)
+        caps.terminal = data.get("terminal", False)
+        fs = data.get("fs", {})
+        caps.fs_read_text_file = fs.get("readTextFile", False)
+        caps.fs_write_text_file = fs.get("writeTextFile", False)
+        return caps
+
+
+@dataclass
+class ACPClientInfo:
+    """客户端信息"""
+
+    name: str
+    version: str = "1.0.0"
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "version": self.version}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ACPClientInfo":
+        return cls(name=data.get("name", "unknown"), version=data.get("version", "1.0.0"))
+
+
+@dataclass
+class ACPServerInfo:
+    """服务端信息"""
+
+    name: str
+    version: str = "1.0.0"
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "version": self.version}
+
+
+@dataclass
+class ACPSession:
+    """ACP 会话"""
+
+    session_id: str
+    cwd: str = ""
+    created_at: float = 0.0
+
+
+class ACPSessionUpdateType(str, Enum):
+    """sessionUpdate 类型"""
+
+    THINKING = "thinking"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    MESSAGE = "message"
+    ERROR = "error"
+
+
+@dataclass
+class ACPSessionUpdate:
+    """sessionUpdate 内容"""
+
+    session_id: str
+    update_type: str
+    content: Any = None
