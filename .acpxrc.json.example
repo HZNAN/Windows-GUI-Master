@@ -1,0 +1,15 @@
+{
+  "defaultAgent": "feishu-test",
+  "nonInteractivePermissions": "deny",
+  "authPolicy": "skip",
+  "ttl": 300,
+  "queueMaxDepth": 16,
+  "format": "text",
+  "agents": {
+    "feishu-test": {
+      "command": ["python", "test_acp_stdio.py"],
+      "env": {},
+      "protocol": "acp"
+    }
+  }
+}
