@@ -14,17 +14,36 @@ from core.acp.protocol import ACPProtocol
 from core.acp.types import ACPMethod
 
 
+def create_ws_headers(token: str) -> dict:
+    """创建 WebSocket headers（兼容不同版本 websockets）"""
+    if not token:
+        return {}
+    # websockets 12.0+ uses additional_headers, 10.x uses extra_headers
+    try:
+        import websockets
+        version = getattr(websockets, 'version', '0.0.0')
+        major = int(version.split('.')[0]) if version else 0
+        if major >= 12:
+            return {"additional_headers": {"Authorization": f"Bearer {token}"}}
+        else:
+            return {"extra_headers": {"Authorization": f"Bearer {token}"}}
+    except:
+        return {"extra_headers": {"Authorization": f"Bearer {token}"}}
+
+
+async def ws_connect(uri: str, token: str = ""):
+    """创建 WebSocket 连接（兼容不同版本）"""
+    headers = create_ws_headers(token)
+    return await websockets.connect(uri, **headers)
+
+
 async def test_initialize(uri: str, token: str = ""):
     """测试 initialize (Standard ACP)"""
     print("\n" + "=" * 60)
     print("测试 1: initialize (Standard ACP)")
     print("=" * 60)
 
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
+    async with await ws_connect(uri, token) as ws:
         msg = ACPProtocol.build_initialize(
             protocol_version="1.0",
             capabilities={
@@ -55,11 +74,7 @@ async def test_new_session(uri: str, token: str = ""):
     print("测试 2: newSession (Standard ACP)")
     print("=" * 60)
 
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
+    async with await ws_connect(uri, token) as ws:
         msg = ACPProtocol.build_new_session(
             session_id=None,
             cwd="/test/workspace",
@@ -86,11 +101,7 @@ async def test_prompt(uri: str, token: str = ""):
     print("测试 3: prompt (Standard ACP)")
     print("=" * 60)
 
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
+    async with await ws_connect(uri, token) as ws:
         msg = ACPProtocol.build_prompt(
             prompt="Hello, this is a test prompt",
             system_prompt="You are a test agent",
@@ -117,11 +128,7 @@ async def test_ping(uri: str, token: str = ""):
     print("测试 4: ping (扩展方法)")
     print("=" * 60)
 
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
+    async with await ws_connect(uri, token) as ws:
         msg = ACPProtocol.build_request(
             method=ACPMethod.PING.value,
             params={},
@@ -148,11 +155,7 @@ async def test_execute(uri: str, token: str = ""):
     print("测试 5: agent.execute (扩展方法)")
     print("=" * 60)
 
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
+    async with await ws_connect(uri, token) as ws:
         msg = ACPProtocol.build_execute(
             action="server.info",
             params={},
@@ -179,11 +182,7 @@ async def test_invalid_method(uri: str, token: str = ""):
     print("测试 6: 无效方法")
     print("=" * 60)
 
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    async with websockets.connect(uri, additional_headers=headers) as ws:
+    async with await ws_connect(uri, token) as ws:
         msg = ACPProtocol.build_request(
             method="invalid.method",
             params={},
@@ -222,6 +221,7 @@ async def run_all_tests():
     print("=" * 60)
     print(f"目标地址: {uri}")
     print(f"Token: {'已配置' if token else '未配置'}")
+    print(f"websockets 版本: {websockets.version}")
 
     results = []
 
