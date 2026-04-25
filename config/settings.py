@@ -36,3 +36,8 @@ VIRTUAL_CURSOR_PATH = os.getenv("VIRTUAL_CURSOR_PATH", "universe")
 VIRTUAL_CURSOR_DURATION = float(os.getenv("VIRTUAL_CURSOR_DURATION", "0.5"))  # 移动时长（秒），越小越快
 VIRTUAL_CURSOR_FPS = int(os.getenv("VIRTUAL_CURSOR_FPS", "60"))  # 帧率，越高越平滑
 VIRTUAL_CURSOR_AMPLITUDE = int(os.getenv("VIRTUAL_CURSOR_AMPLITUDE", "15"))  # 曲线幅度扰动（像素）
+
+# ============ ACP 协议配置 ============
+ACP_HOST = os.getenv("ACP_HOST", "localhost")
+ACP_PORT = int(os.getenv("ACP_PORT", "8765"))
+ACP_TOKEN = os.getenv("ACP_TOKEN", "")  # Bearer token，为空则禁用认证
