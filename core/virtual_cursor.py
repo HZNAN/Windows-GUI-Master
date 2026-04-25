@@ -2,6 +2,7 @@
 虚拟光标动画引擎
 使用贝塞尔曲线 + 缓动函数生成平滑的人类风格移动轨迹
 """
+import ctypes
 import random
 import threading
 import time
@@ -132,6 +133,7 @@ class VirtualCursor:
 
         # 执行动画
         self._running = True
+
         for frame in range(total_frames + 1):
             if not self._running:
                 break
@@ -153,6 +155,9 @@ class VirtualCursor:
             # 更新位置
             self._current_pos = (final_x, final_y)
             self.overlay.move_cursor(final_x, final_y)
+
+            # 处理 Windows 消息（保持窗口响应）
+            self._pump_messages()
 
             # 等待下一帧
             time.sleep(1.0 / self.fps)
@@ -181,6 +186,18 @@ class VirtualCursor:
     def stop(self):
         """立即停止当前动画"""
         self._running = False
+
+    def _pump_messages(self):
+        """处理 Windows 消息（非阻塞）"""
+        import ctypes
+        from ctypes import windll, byref
+
+        PM_REMOVE = 0x0001
+        msg = ctypes.wintypes.MSG()
+        while windll.user32.PeekMessageW(byref(msg), None, 0, 0, PM_REMOVE):
+            if msg.message == 0x0100 or msg.message == 0x0101:  # WM_KEYDOWN/WM_KEYUP
+                windll.user32.TranslateMessage(byref(msg))
+            windll.user32.DispatchMessageW(byref(msg))
 
 
 # 全局单例

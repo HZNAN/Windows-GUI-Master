@@ -32,6 +32,7 @@ class Win32Overlay:
         self._cursor_png_path: Optional[str] = None
         self._cursor_type: str = "arrow"
         self._hicons: dict = {}  # 缓存不同类型的 HICON
+        self._size = 24
 
     @classmethod
     def get_instance(cls) -> "Win32Overlay":
@@ -320,7 +321,7 @@ class Win32Overlay:
         wc = win32gui.WNDCLASS()
         wc.lpfnWndProc = self._wnd_proc
         wc.lpszClassName = class_name
-        wc.hbrBackground = win32gui.CreateSolidBrush(win32api.RGB(0, 0, 0))
+        wc.hbrBackground = win32gui.CreateSolidBrush(win32api.RGB(0, 0, 0))  # 黑色背景
         wc.hCursor = 0
 
         win32gui.RegisterClass(wc)
@@ -378,7 +379,7 @@ class Win32Overlay:
             class_name,
             "VirtualCursor",
             win32con.WS_POPUP,
-            0, 0, 24, 24,
+            0, 0, self._size, self._size,
             0, 0, 0, None
         )
 
@@ -401,7 +402,7 @@ class Win32Overlay:
         # 初始隐藏
         win32gui.SetWindowPos(
             self.hwnd, win32con.HWND_TOPMOST,
-            -100, -100, 24, 24,
+            -100, -100, self._size, self._size,
             win32con.SWP_NOACTIVATE | win32con.SWP_HIDEWINDOW
         )
 
@@ -416,7 +417,6 @@ class Win32Overlay:
         if self.hwnd and cursor_type in self._hicons:
             self.cursor_hicon = self._hicons[cursor_type]
             win32gui.InvalidateRect(self.hwnd, None, False)
-            win32gui.UpdateWindow(self.hwnd)
 
     def show(self):
         self._ensure_window()
@@ -448,19 +448,18 @@ class Win32Overlay:
         win32gui.SetWindowPos(
             self.hwnd,
             win32con.HWND_TOPMOST,
-            x - 12, y - 12, 24, 24,
+            x - self._size // 2, y - self._size // 2, self._size, self._size,
             win32con.SWP_NOACTIVATE | win32con.SWP_SHOWWINDOW
         )
 
         # 触发重绘
         win32gui.InvalidateRect(self.hwnd, None, False)
-        win32gui.UpdateWindow(self.hwnd)
 
     def close(self):
         if self.hwnd:
             win32gui.DestroyWindow(self.hwnd)
             self.hwnd = 0
-            self._visible = False
+        self._visible = False
 
 
 _overlay: Optional[Win32Overlay] = None
