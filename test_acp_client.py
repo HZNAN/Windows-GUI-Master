@@ -6,6 +6,8 @@ import asyncio
 import json
 import sys
 
+import websockets
+
 sys.path.insert(0, ".")
 
 from core.acp.protocol import ACPProtocol
@@ -205,7 +207,6 @@ async def test_invalid_method(uri: str, token: str = ""):
 async def run_all_tests():
     """运行所有测试"""
     import os
-    import websockets
     from dotenv import load_dotenv
 
     load_dotenv()
