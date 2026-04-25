@@ -95,6 +95,8 @@ class ExecutionEngine:
                 if x is None or y is None:
                     logger.error(f"scroll 缺少坐标: ({x}, {y})")
                     return False
+                self._virtual_cursor.move_to(x, y)
+                time.sleep(0.05)  # 等待动画完成
                 scroll_amount = amount if amount is not None else 3
                 self.input.scroll(x, y, scroll_amount)
                 logger.info(f"执行 scroll: ({x}, {y}), amount={scroll_amount}")

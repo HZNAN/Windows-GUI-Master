@@ -97,15 +97,27 @@ class InputControl:
 
     def scroll(self, x: int, y: int, amount: int = 3):
         """
-        在指定位置滚动
+        在指定位置滚动（虚拟光标模式）
 
         Args:
             x, y: 滚动位置
             amount: 滚动量，正数向上滚动，负数向下滚动
         """
-        pyautogui.moveTo(x, y)
-        pyautogui.scroll(amount)  # pyautogui: 正数向上，负数向下
+        if self.virtual_mode:
+            self._virtual_scroll(x, y, amount)
+        else:
+            pyautogui.moveTo(x, y)
+            pyautogui.scroll(amount)
         logger.debug(f"鼠标滚动: ({x}, {y}), 量={amount}")
+
+    def _virtual_scroll(self, x: int, y: int, amount: int = 3):
+        """虚拟滚动：移动真实光标 → 滚动 → 恢复"""
+        original_pos = win32api.GetCursorPos()
+        win32api.SetCursorPos((x, y))
+        time.sleep(0.01)
+        pyautogui.scroll(amount)
+        time.sleep(0.01)
+        win32api.SetCursorPos(original_pos)
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
         """
