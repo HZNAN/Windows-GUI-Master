@@ -43,7 +43,8 @@ async def test_initialize(uri: str, token: str = ""):
     print("测试 1: initialize (Standard ACP)")
     print("=" * 60)
 
-    async with await ws_connect(uri, token) as ws:
+    ws = await ws_connect(uri, token)
+    async with ws:
         msg = ACPProtocol.build_initialize(
             protocol_version="1.0",
             capabilities={
@@ -74,7 +75,8 @@ async def test_new_session(uri: str, token: str = ""):
     print("测试 2: newSession (Standard ACP)")
     print("=" * 60)
 
-    async with await ws_connect(uri, token) as ws:
+    ws = await ws_connect(uri, token)
+    async with ws:
         msg = ACPProtocol.build_new_session(
             session_id=None,
             cwd="/test/workspace",
@@ -101,7 +103,8 @@ async def test_prompt(uri: str, token: str = ""):
     print("测试 3: prompt (Standard ACP)")
     print("=" * 60)
 
-    async with await ws_connect(uri, token) as ws:
+    ws = await ws_connect(uri, token)
+    async with ws:
         msg = ACPProtocol.build_prompt(
             prompt="Hello, this is a test prompt",
             system_prompt="You are a test agent",
@@ -128,7 +131,8 @@ async def test_ping(uri: str, token: str = ""):
     print("测试 4: ping (扩展方法)")
     print("=" * 60)
 
-    async with await ws_connect(uri, token) as ws:
+    ws = await ws_connect(uri, token)
+    async with ws:
         msg = ACPProtocol.build_request(
             method=ACPMethod.PING.value,
             params={},
@@ -155,7 +159,8 @@ async def test_execute(uri: str, token: str = ""):
     print("测试 5: agent.execute (扩展方法)")
     print("=" * 60)
 
-    async with await ws_connect(uri, token) as ws:
+    ws = await ws_connect(uri, token)
+    async with ws:
         msg = ACPProtocol.build_execute(
             action="server.info",
             params={},
@@ -182,7 +187,8 @@ async def test_invalid_method(uri: str, token: str = ""):
     print("测试 6: 无效方法")
     print("=" * 60)
 
-    async with await ws_connect(uri, token) as ws:
+    ws = await ws_connect(uri, token)
+    async with ws:
         msg = ACPProtocol.build_request(
             method="invalid.method",
             params={},
