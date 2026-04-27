@@ -129,36 +129,27 @@ class VirtualCursor:
         return BezierCurve(x1, y1, p1x, p1y, p2x, p2y, x2, y2)
 
     def move_to(self, x: int, y: int, callback: Optional[Callable] = None):
-        """
-        移动虚拟光标到目标坐标 (带动画)
-
-        Args:
-            x, y: 目标屏幕坐标
-            callback: 移动完成后的回调函数
-        """
+        """移动虚拟光标到目标坐标（带动画 + 方向旋转）"""
         with self._lock:
             if self._running:
-                # 正在移动，先停止
                 self._running = False
                 time.sleep(0.05)
-
+            self._idle_running = False  # 停止 idle 动画
             start_x, start_y = self._current_pos
             self._target_pos = (x, y)
 
-        # 生成曲线
         curve = self._generate_curve(start_x, start_y, x, y)
 
-        # 计算帧数
         total_frames = int(self.duration * self.fps)
         if total_frames < 1:
             total_frames = 1
 
-        # 显示覆盖层
         self.overlay.show()
 
-        # 执行动画
         self._running = True
         frame_duration = 1.0 / self.fps
+
+        last_angle = self._current_angle
 
         for frame in range(total_frames + 1):
             if not self._running:
@@ -167,25 +158,24 @@ class VirtualCursor:
             t_raw = frame / total_frames
             t_eased = ease_in_out_cubic(t_raw)
 
-            # 计算曲线上的点
             px, py = curve.point_at(t_raw)
-
-            # 应用缓动后的位置
             actual_x = start_x + (x - start_x) * t_eased
             actual_y = start_y + (y - start_y) * t_eased
 
-            # 使用贝塞尔曲线点，但用缓动函数调整（组合效果）
             final_x = int(px * t_eased + actual_x * (1 - t_eased))
             final_y = int(py * t_eased + actual_y * (1 - t_eased))
 
-            # 更新时间
+            # 计算并设置切线方向旋转角度
+            angle = self._calc_tangent_angle(curve, t_raw)
+            self._current_angle = angle
+            last_angle = angle
+
             self._current_pos = (final_x, final_y)
             start_time = time.perf_counter()
 
-            # 移动光标（UpdateWindow 同步等待重绘完成）
+            self.overlay.set_angle(angle)
             self.overlay.move_cursor(final_x, final_y)
 
-            # 计算实际花费的时间，动态调整等待时间
             elapsed = time.perf_counter() - start_time
             remaining = frame_duration - elapsed
             if remaining > 0:
@@ -193,10 +183,36 @@ class VirtualCursor:
 
         self._running = False
         self._current_pos = (x, y)
+        self.overlay.set_angle(last_angle)
         self.overlay.move_cursor(x, y)
+
+        # 归位旋转 → 启动 idle 晃动
+        self._return_rotation(last_angle)
+        # _start_idle_animation() will be added in Task 6 — leave a comment
+        # self._start_idle_animation()  # TODO: uncomment in Task 6
 
         if callback:
             callback()
+
+    def _return_rotation(self, from_angle: float):
+        """从当前角度平滑旋转回默认角度"""
+        total_frames = int(RETURN_DURATION * self.fps)
+        if total_frames < 1:
+            total_frames = 1
+        frame_duration = 1.0 / self.fps
+
+        for frame in range(total_frames + 1):
+            t_raw = frame / total_frames
+            t_eased = ease_in_out_cubic(t_raw)
+            angle = from_angle + (DEFAULT_ANGLE - from_angle) * t_eased
+            self._current_angle = angle
+            self.overlay.set_angle(angle)
+            start_time = time.perf_counter()
+            self.overlay.move_cursor(self._current_pos[0], self._current_pos[1])
+            elapsed = time.perf_counter() - start_time
+            remaining = frame_duration - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
 
     def set_position(self, x: int, y: int):
         """直接设置光标位置（无动画）"""
