@@ -515,9 +515,10 @@ class Win32Overlay:
         # 设置透明色键
         win32gui.SetLayeredWindowAttributes(self.hwnd, win32api.RGB(0, 0, 0), 0, win32con.LWA_COLORKEY)
 
-        # 预加载两种光标
+        # 预加载两种光标的源图和默认 HICON
         for cursor_type in ["arrow", "hand"]:
             img = self._create_cursor_image(cursor_type)
+            self._source_images[cursor_type] = img  # 保存源图供 angle cache 使用
             hicon = self._create_hicon(img, cursor_type)
             if hicon:
                 self._hicons[cursor_type] = hicon
@@ -542,10 +543,18 @@ class Win32Overlay:
 
         self._cursor_type = cursor_type
 
-        # 如果窗口已创建，切换 HICON
-        if self.hwnd and cursor_type in self._hicons:
+        # 确保该类型的源图已加载
+        if cursor_type not in self._source_images:
+            self._source_images[cursor_type] = self._create_cursor_image(cursor_type)
+
+        # 使用当前角度的缓存 HICON（懒构建）
+        if self.hwnd:
+            hicon = self._get_cached_hicon(cursor_type, self._current_angle)
+            if hicon:
+                self.cursor_hicon = hicon
+                win32gui.InvalidateRect(self.hwnd, None, False)
+        elif cursor_type in self._hicons:
             self.cursor_hicon = self._hicons[cursor_type]
-            win32gui.InvalidateRect(self.hwnd, None, False)
 
     def show(self):
         self._ensure_window()
@@ -586,6 +595,17 @@ class Win32Overlay:
         win32gui.UpdateWindow(self.hwnd)  # 阻塞直到 WM_PAINT 处理完成
 
     def close(self):
+        # 销毁所有角度缓存的 HICON
+        for cache in self._angle_cache.values():
+            for hicon in cache.values():
+                if hicon:
+                    win32gui.DestroyIcon(hicon)
+        self._angle_cache.clear()
+        # 销毁默认 HICON
+        for hicon in self._hicons.values():
+            if hicon:
+                win32gui.DestroyIcon(hicon)
+        self._hicons.clear()
         if self.hwnd:
             win32gui.DestroyWindow(self.hwnd)
             self.hwnd = 0
