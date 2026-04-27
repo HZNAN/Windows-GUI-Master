@@ -64,7 +64,7 @@ class VirtualCursor:
 
     @property
     def overlay(self):
-        if self._overlay is None:
+        if self._overlay is None or (hasattr(self._overlay, 'hwnd') and self._overlay.hwnd == 0):
             self._overlay = get_overlay()
         return self._overlay
 
@@ -190,6 +190,8 @@ class VirtualCursor:
     def stop(self):
         """立即停止当前动画"""
         self._running = False
+        # 等待一小段时间让动画线程有机会退出
+        time.sleep(0.1)
 
     def _pump_messages(self):
         """处理 Windows 消息（非阻塞）"""

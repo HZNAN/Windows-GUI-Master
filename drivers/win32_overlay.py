@@ -468,6 +468,6 @@ _overlay: Optional[Win32Overlay] = None
 
 def get_overlay() -> Win32Overlay:
     global _overlay
-    if _overlay is None:
-        _overlay = Win32Overlay.get_instance()
+    if _overlay is None or _overlay.hwnd == 0:
+        _overlay = Win32Overlay()  # 直接创建，绕过类级单例的缓存问题
     return _overlay
