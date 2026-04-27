@@ -162,14 +162,14 @@ class ACPServer:
             await self._handle_cancel(ws, msg)
         elif msg.method == ACPMethod.PING.value:
             await self._handle_ping(ws, msg)
-        # Standard ACP methods
-        elif msg.method == ACPMethod.INITIALIZE.value:
+        # Standard ACP methods (兼容 acpx 的 session/* 格式)
+        elif msg.method in (ACPMethod.INITIALIZE.value, "initialize"):
             await self._handle_initialize(ws, msg)
-        elif msg.method == ACPMethod.NEW_SESSION.value:
+        elif msg.method in (ACPMethod.NEW_SESSION.value, "session/new"):
             await self._handle_new_session(ws, msg)
-        elif msg.method == ACPMethod.LOAD_SESSION.value:
+        elif msg.method in (ACPMethod.LOAD_SESSION.value, "session/load"):
             await self._handle_load_session(ws, msg)
-        elif msg.method == ACPMethod.PROMPT.value:
+        elif msg.method in (ACPMethod.PROMPT.value, "session/prompt"):
             await self._handle_prompt(ws, msg)
         else:
             error = ACPProtocol.build_error(
@@ -336,11 +336,21 @@ class ACPServer:
             await ws.send(ACPProtocol.encode(error))
 
     async def _handle_prompt(self, ws: WebSocketServerProtocol, msg: ACPMessage):
-        """处理 prompt (Standard ACP)"""
+        """处理 prompt (Standard ACP, 兼容 acpx)"""
         try:
             params = msg.params or {}
-            prompt_text = params.get("prompt", "")
+            prompt_content = params.get("prompt", "")
             system_prompt = params.get("systemPrompt")
+
+            # 兼容 acpx 格式: prompt可能是数组 [{"type":"text","text":"..."}]
+            if isinstance(prompt_content, list):
+                text_parts = []
+                for item in prompt_content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                prompt_text = "".join(text_parts)
+            else:
+                prompt_text = str(prompt_content)
 
             session_id = self._current_session.session_id if self._current_session else "default"
 

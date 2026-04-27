@@ -198,17 +198,20 @@ class ACPProtocol:
         )
 
     @classmethod
-    def build_response(
+    def build_agent_response(
         cls,
         request_id: str,
         result: dict,
     ) -> ACPMessage:
-        """构建响应 (Client -> Server)"""
+        """构建 agent.response 响应 (Client -> Server)"""
         return cls.build_request(
             method=ACPMethod.RESPONSE.value,
             params={"request_id": request_id, "result": result},
             msg_id=request_id,
         )
+
+    # Alias for backwards compatibility
+    build_response_for_agent = build_agent_response
 
     # ===== Standard ACP Method Builders =====
 

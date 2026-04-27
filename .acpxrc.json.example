@@ -7,7 +7,7 @@
   "format": "text",
   "agents": {
     "feishu-test": {
-      "command": ["python", "test_acp_stdio.py"],
+      "command": "python -u test_acp_stdio.py",
       "env": {},
       "protocol": "acp"
     }

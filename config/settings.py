@@ -23,6 +23,15 @@ MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
 SCREENSHOT_INTERVAL = float(os.getenv("SCREENSHOT_INTERVAL", "0.5"))
 STEP_TIMEOUT = int(os.getenv("STEP_TIMEOUT", "30"))
 
+# ============ ReactAgent 配置 ============
+AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))
+AGENT_HISTORY_WINDOW = int(os.getenv("AGENT_HISTORY_WINDOW", "3"))
+
+# ============ LLM 模型配置 ============
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
+LLM_TOP_P = float(os.getenv("LLM_TOP_P", "1.0"))
+
 # ============ 日志配置 ============
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = PROJECT_ROOT / "logs" / "agent.log"
