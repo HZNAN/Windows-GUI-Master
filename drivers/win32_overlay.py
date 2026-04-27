@@ -33,6 +33,9 @@ class Win32Overlay:
         self._cursor_type: str = "arrow"
         self._hicons: dict = {}  # 缓存不同类型的 HICON
         self._size = 24
+        self._source_images: dict = {}     # cursor_type -> PIL Image (原始未旋转)
+        self._angle_cache: dict[str, dict[int, int]] = {}  # cursor_type -> {snapped_angle: HICON}
+        self._current_angle: float = -45.0
 
     @classmethod
     def get_instance(cls) -> "Win32Overlay":
@@ -397,6 +400,40 @@ class Win32Overlay:
         windll.gdi32.DeleteDC(hdc)
 
         return hicon
+
+    def _build_angle_cache(self, cursor_type: str):
+        """为一个光标类型预生成 120 个旋转 HICON（每 3° 一个）"""
+        if cursor_type not in self._source_images:
+            img = self._create_cursor_image(cursor_type)
+            self._source_images[cursor_type] = img
+        source = self._source_images[cursor_type]
+
+        cache: dict[int, int] = {}
+        for deg in range(0, 360, 3):
+            # 源图 tip 指向 -45°（左上），要转到 deg 需要旋转 (deg + 45)°
+            rotated = source.rotate(deg + 45, resample=Image.BICUBIC, expand=False)
+            hicon = self._create_hicon_from_image(rotated)
+            if hicon:
+                cache[deg] = hicon
+        self._angle_cache[cursor_type] = cache
+
+    def _get_cached_hicon(self, cursor_type: str, angle: float) -> int:
+        """获取最接近角度的缓存 HICON，必要时懒构建缓存"""
+        if cursor_type not in self._angle_cache:
+            self._build_angle_cache(cursor_type)
+        cache = self._angle_cache[cursor_type]
+        snapped = round(angle / 3) * 3
+        snapped = snapped % 360
+        return cache.get(snapped, 0)
+
+    def set_angle(self, angle: float):
+        """设置光标显示角度并触发重绘"""
+        self._current_angle = angle
+        hicon = self._get_cached_hicon(self._cursor_type, angle)
+        if hicon:
+            self.cursor_hicon = hicon
+            if self.hwnd:
+                win32gui.InvalidateRect(self.hwnd, None, False)
 
     def _create_window_class(self) -> str:
         """注册窗口类"""
