@@ -310,17 +310,23 @@ class Win32Overlay:
 
     def _create_hicon_from_image(self, img: Image.Image) -> int:
         """从 PIL Image 直接创建 HICON（纯内存，无文件 I/O，用于批量缓存构建）"""
-        from ctypes import windll, c_short, c_uint, c_long, Structure, sizeof, c_void_p, byref, cast, POINTER
-        import struct
+        from ctypes import windll, c_uint, c_long, Structure, c_void_p, byref, cast, POINTER
 
-        size = 24
+        size = self._size
 
         # 准备 BGRA 数据（上下翻转，因为 DIB 是 bottom-up）
-        pixels = []
-        for y in range(size - 1, -1, -1):
+        raw = img.tobytes()  # R,G,B,A repeated
+        pixels = bytearray(size * size * 4)
+        for y in range(size):
+            src_row = (size - 1 - y) * size * 4
+            dst_row = y * size * 4
             for x in range(size):
-                r, g, b, a = img.getpixel((x, y))
-                pixels.extend([b, g, r, a])
+                off = src_row + x * 4
+                dst_off = dst_row + x * 4
+                pixels[dst_off + 0] = raw[off + 2]  # B
+                pixels[dst_off + 1] = raw[off + 1]  # G
+                pixels[dst_off + 2] = raw[off + 0]  # R
+                pixels[dst_off + 3] = raw[off + 3]  # A
 
         class BITMAPINFOHEADER(Structure):
             _fields_ = [
@@ -348,13 +354,10 @@ class Win32Overlay:
             return 0
 
         # 复制像素数据到 DIB
-        img_size = size * size
-        pPixels = cast(ppvBits, POINTER(c_long * img_size)).contents
-        for i in range(img_size):
-            offset = i * 4
-            pPixels[i] = struct.unpack('<I', bytes(pixels[offset:offset+4]))[0]
+        pixel_buffer = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(bytes(pixels))
+        ctypes.memmove(ppvBits, pixel_buffer, len(pixels))
 
-        # 创建 AND mask（全 0xFF 表示全不透明，由 color 的 alpha 决定）
+        # AND mask（32bpp 图标由 alpha 通道控制透明度，mask 填充 0xFF 作为兼容）
         bmi_mask = BITMAPINFOHEADER()
         bmi_mask.biSize = 40
         bmi_mask.biWidth = size
