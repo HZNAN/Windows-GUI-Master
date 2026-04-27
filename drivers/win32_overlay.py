@@ -312,94 +312,42 @@ class Win32Overlay:
         return 0
 
     def _create_hicon_from_image(self, img: Image.Image) -> int:
-        """从 PIL Image 直接创建 HICON（纯内存，无文件 I/O，用于批量缓存构建）"""
-        from ctypes import windll, c_short, c_uint, c_long, Structure, c_void_p, byref, cast, POINTER
+        """从 PIL Image 通过 PNG→ICO 文件 + LoadImage 创建 HICON"""
+        import io
+        import struct
 
         size = self._size
 
-        # 准备 BGRA 数据（上下翻转，因为 DIB 是 bottom-up）
-        raw = img.tobytes()  # R,G,B,A repeated
-        pixels = bytearray(size * size * 4)
-        for y in range(size):
-            src_row = (size - 1 - y) * size * 4
-            dst_row = y * size * 4
-            for x in range(size):
-                off = src_row + x * 4
-                dst_off = dst_row + x * 4
-                pixels[dst_off + 0] = raw[off + 2]  # B
-                pixels[dst_off + 1] = raw[off + 1]  # G
-                pixels[dst_off + 2] = raw[off + 0]  # R
-                pixels[dst_off + 3] = raw[off + 3]  # A
+        # 将 PIL Image 保存为 PNG 字节流
+        png_buf = io.BytesIO()
+        img.save(png_buf, format="PNG")
+        png_data = png_buf.getvalue()
 
-        class BITMAPINFOHEADER(Structure):
-            _fields_ = [
-                ('biSize', c_uint), ('biWidth', c_long), ('biHeight', c_long),
-                ('biPlanes', c_short), ('biBitCount', c_short), ('biCompression', c_uint),
-                ('biSizeImage', c_uint), ('biXPelsPerMeter', c_long),
-                ('biYPelsPerMeter', c_long), ('biClrUsed', c_uint), ('biClrImportant', c_uint),
-            ]
+        # 构建 ICO 文件（ICO header + directory entry + PNG 数据）
+        ico_header = struct.pack('<HHH', 0, 1, 1)
+        ico_entry = struct.pack('<BBBBHHII', size, size, 0, 0, 1, 32, len(png_data), 22)
 
-        hdc = windll.gdi32.CreateCompatibleDC(0)
+        # 写入临时 ICO 文件
+        fd, ico_path = tempfile.mkstemp(suffix='.ico', prefix='vc_cache_')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(ico_header)
+                f.write(ico_entry)
+                f.write(png_data)
 
-        bmi_color = BITMAPINFOHEADER()
-        bmi_color.biSize = 40
-        bmi_color.biWidth = size
-        bmi_color.biHeight = size * 2
-        bmi_color.biPlanes = 1
-        bmi_color.biBitCount = 32
-        bmi_color.biCompression = 0  # BI_RGB
-        bmi_color.biSizeImage = size * size * 4
+            # 通过 LoadImage 加载 HICON（与 _create_hicon 相同路径）
+            hicon = win32gui.LoadImage(
+                0, ico_path, win32con.IMAGE_ICON,
+                size, size,
+                win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+            )
+        finally:
+            try:
+                os.unlink(ico_path)
+            except OSError:
+                pass
 
-        ppvBits = c_void_p()
-        hbmColor = windll.gdi32.CreateDIBSection(hdc, byref(bmi_color), 0, byref(ppvBits), None, 0)
-        if not hbmColor or not ppvBits or not ppvBits.value:
-            windll.gdi32.DeleteDC(hdc)
-            return 0
-
-        # 复制像素数据到 DIB
-        pixel_buffer = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(bytes(pixels))
-        ctypes.memmove(ppvBits, pixel_buffer, len(pixels))
-
-        # AND mask（32bpp 图标由 alpha 通道控制透明度，mask 填充 0x00 让 alpha 生效）
-        bmi_mask = BITMAPINFOHEADER()
-        bmi_mask.biSize = 40
-        bmi_mask.biWidth = size
-        bmi_mask.biHeight = size
-        bmi_mask.biPlanes = 1
-        bmi_mask.biBitCount = 1
-        bmi_mask.biCompression = 0
-        bmi_mask.biSizeImage = size * size // 8
-
-        ppvMask = c_void_p()
-        hbmMask = windll.gdi32.CreateDIBSection(hdc, byref(bmi_mask), 0, byref(ppvMask), None, 0)
-        if hbmMask and ppvMask and ppvMask.value:
-            from ctypes import c_ubyte
-            mask_size = size * size // 8
-            pMask = cast(ppvMask, POINTER(c_ubyte * mask_size)).contents
-            for i in range(mask_size):
-                pMask[i] = 0x00
-
-        class ICONINFO(Structure):
-            _fields_ = [
-                ('fIcon', c_uint), ('xHotspot', c_uint), ('yHotspot', c_uint),
-                ('hbmMask', c_void_p), ('hbmColor', c_void_p),
-            ]
-
-        ii = ICONINFO()
-        ii.fIcon = 0
-        ii.xHotspot = 0
-        ii.yHotspot = 0
-        ii.hbmMask = hbmMask if hbmMask else None
-        ii.hbmColor = hbmColor
-
-        hicon = windll.user32.CreateIconIndirect(byref(ii))
-
-        if hbmMask:
-            windll.gdi32.DeleteObject(hbmMask)
-        windll.gdi32.DeleteObject(hbmColor)
-        windll.gdi32.DeleteDC(hdc)
-
-        return hicon
+        return hicon if hicon else 0
 
     def _build_angle_cache(self, cursor_type: str):
         """为一个光标类型预生成 120 个旋转 HICON（每 3° 一个）"""
