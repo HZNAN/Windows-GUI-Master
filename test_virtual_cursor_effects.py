@@ -14,17 +14,17 @@ def test_tangent_angle_horizontal():
 
 
 def test_tangent_angle_vertical_up():
-    """垂直向上移动 -> 切线角度应为 90度"""
+    """垂直向上移动 -> 切线角度应为 -90度（negated）"""
     curve = BezierCurve(0, 100, 0, 66, 0, 33, 0, 0)
     angle = VirtualCursor._calc_tangent_angle(curve, 0.5)
-    assert abs(angle - 90) < 1, f"Expected ~90 degrees, got {angle}degrees"
+    assert abs(angle - (-90)) < 1, f"Expected ~-90 degrees, got {angle}degrees"
 
 
 def test_tangent_angle_diagonal():
-    """对角线右上移动 -> 切线角度应为 ~45度"""
+    """对角线右上移动 -> 切线角度应为 ~-45度（negated）"""
     curve = BezierCurve(0, 100, 33, 66, 66, 33, 100, 0)
     angle = VirtualCursor._calc_tangent_angle(curve, 0.5)
-    assert 40 < angle < 50, f"Expected ~45 degrees, got {angle}degrees"
+    assert -50 < angle < -40, f"Expected ~-45 degrees, got {angle}degrees"
 
 
 def test_tangent_angle_at_start():
@@ -36,12 +36,12 @@ def test_tangent_angle_at_start():
 
 def test_idle_wobble_formula():
     """验证 idle wobble 公式在合理范围内"""
-    elapsed = 0.25  # 四分之一周期
+    elapsed = 0.3  # 四分之一周期
     angle = DEFAULT_ANGLE + IDLE_AMPLITUDE * math.sin(elapsed * 2 * math.pi / IDLE_PERIOD)
-    # 1/4 周期时 sin(pi/2) = 1，角度应为 -45 + 6 = -39
-    assert abs(angle - (-39.0)) < 0.1, f"Expected ~-39 degrees, got {angle}degrees"
+    # 1/4 周期时 sin(pi/2) = 1，角度应为 -45 + 12 = -33
+    assert abs(angle - (-33.0)) < 0.1, f"Expected ~-33 degrees, got {angle}degrees"
 
-    elapsed = 0.5  # 半周期
+    elapsed = 0.6  # 半周期
     angle = DEFAULT_ANGLE + IDLE_AMPLITUDE * math.sin(elapsed * 2 * math.pi / IDLE_PERIOD)
     # 半周期时 sin(pi) = 0，角度应为 -45
     assert abs(angle - DEFAULT_ANGLE) < 0.1, f"Expected ~{DEFAULT_ANGLE} degrees, got {angle}degrees"

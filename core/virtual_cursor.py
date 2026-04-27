@@ -14,8 +14,8 @@ from drivers.win32_overlay import get_overlay
 
 # 动画效果常量
 DEFAULT_ANGLE = -45.0       # 光标默认指向（左上）
-IDLE_AMPLITUDE = 6.0        # 静止晃动幅度（+-度）
-IDLE_PERIOD = 1.0           # 静止晃动周期（秒）
+IDLE_AMPLITUDE = 12.0       # 静止晃动幅度（+-度）
+IDLE_PERIOD = 1.2           # 静止晃动周期（秒）
 IDLE_FPS = 30               # 静止晃动帧率
 RETURN_DURATION = 0.3       # 归位旋转时长（秒）
 
@@ -91,7 +91,7 @@ class VirtualCursor:
         dy = y2 - y1
         if abs(dx) < 0.001 and abs(dy) < 0.001:
             return DEFAULT_ANGLE
-        return math.degrees(math.atan2(-dy, dx))
+        return -math.degrees(math.atan2(-dy, dx))
 
     def _generate_curve(self, x1: float, y1: float, x2: float, y2: float) -> BezierCurve:
         """
