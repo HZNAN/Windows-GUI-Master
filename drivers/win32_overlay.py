@@ -358,17 +358,21 @@ class Win32Overlay:
         source = self._source_images[cursor_type]
 
         size = self._size
+        canvas_size = 72  # 大画布确保旋转后不裁剪
+
+        # 将源图居中放置在大画布上
+        padded = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
+        offset = (canvas_size - size) // 2
+        padded.paste(source, (offset, offset))
 
         cache: dict[int, int] = {}
         for deg in range(0, 360, 3):
-            # 源图箭头朝上，PIL 旋转 CCW，角度约定 CW from 右（屏幕坐标）
-            # 要显示在 deg 方向：PIL 旋转 = -deg - 90
-            # expand=True 自动扩展画布避免裁剪，然后中心裁回 24x24
-            rotated = source.rotate(-deg - 90, resample=Image.BICUBIC, expand=True)
-            rw, rh = rotated.size
-            crop_left = (rw - size) // 2
-            crop_top = (rh - size) // 2
-            cropped = rotated.crop((crop_left, crop_top, crop_left + size, crop_top + size))
+            # 源图自然朝向左上，PIL rotate CCW；角度约定 0=右 90=下 180=左 270=上
+            # 要显示在 deg 方向：PIL 旋转 = 225 - deg
+            rotated = padded.rotate(225 - deg, resample=Image.BICUBIC, expand=False)
+            # 中心裁剪回 24x24
+            crop_offset = (canvas_size - size) // 2
+            cropped = rotated.crop((crop_offset, crop_offset, crop_offset + size, crop_offset + size))
             hicon = self._create_hicon_from_image(cropped)
             if hicon:
                 cache[deg] = hicon

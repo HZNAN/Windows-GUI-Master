@@ -165,9 +165,14 @@ class VirtualCursor:
             final_x = int(px * t_eased + actual_x * (1 - t_eased))
             final_y = int(py * t_eased + actual_y * (1 - t_eased))
 
-            # 计算切线方向旋转角度，平滑过渡
+            # 计算切线方向旋转角度，平滑过渡（处理角度回绕）
             target_angle = self._calc_tangent_angle(curve, t_raw)
-            angle = last_angle + (target_angle - last_angle) * 0.4
+            diff = target_angle - last_angle
+            if diff > 180:
+                diff -= 360
+            elif diff < -180:
+                diff += 360
+            angle = last_angle + diff * 0.4
             self._current_angle = angle
             last_angle = angle
 
