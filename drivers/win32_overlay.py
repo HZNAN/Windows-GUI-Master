@@ -360,7 +360,7 @@ class Win32Overlay:
         pixel_buffer = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(bytes(pixels))
         ctypes.memmove(ppvBits, pixel_buffer, len(pixels))
 
-        # AND mask（32bpp 图标由 alpha 通道控制透明度，mask 填充 0xFF 作为兼容）
+        # AND mask（32bpp 图标由 alpha 通道控制透明度，mask 填充 0x00 让 alpha 生效）
         bmi_mask = BITMAPINFOHEADER()
         bmi_mask.biSize = 40
         bmi_mask.biWidth = size
@@ -377,7 +377,7 @@ class Win32Overlay:
             mask_size = size * size // 8
             pMask = cast(ppvMask, POINTER(c_ubyte * mask_size)).contents
             for i in range(mask_size):
-                pMask[i] = 0xFF
+                pMask[i] = 0x00
 
         class ICONINFO(Structure):
             _fields_ = [
