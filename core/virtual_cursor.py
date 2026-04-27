@@ -13,7 +13,7 @@ from loguru import logger
 from drivers.win32_overlay import get_overlay
 
 # 动画效果常量
-DEFAULT_ANGLE = -45.0       # 光标默认指向（左上）
+DEFAULT_ANGLE = -135.0      # 光标默认指向（左上）
 IDLE_AMPLITUDE = 12.0       # 静止晃动幅度（+-度）
 IDLE_PERIOD = 1.2           # 静止晃动周期（秒）
 IDLE_FPS = 30               # 静止晃动帧率
@@ -165,8 +165,9 @@ class VirtualCursor:
             final_x = int(px * t_eased + actual_x * (1 - t_eased))
             final_y = int(py * t_eased + actual_y * (1 - t_eased))
 
-            # 计算并设置切线方向旋转角度
-            angle = self._calc_tangent_angle(curve, t_raw)
+            # 计算切线方向旋转角度，平滑过渡
+            target_angle = self._calc_tangent_angle(curve, t_raw)
+            angle = last_angle + (target_angle - last_angle) * 0.4
             self._current_angle = angle
             last_angle = angle
 

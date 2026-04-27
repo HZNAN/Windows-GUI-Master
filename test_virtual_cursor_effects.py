@@ -38,10 +38,10 @@ def test_idle_wobble_formula():
     """验证 idle wobble 公式在合理范围内"""
     elapsed = 0.3  # 四分之一周期
     angle = DEFAULT_ANGLE + IDLE_AMPLITUDE * math.sin(elapsed * 2 * math.pi / IDLE_PERIOD)
-    # 1/4 周期时 sin(pi/2) = 1，角度应为 -45 + 12 = -33
-    assert abs(angle - (-33.0)) < 0.1, f"Expected ~-33 degrees, got {angle}degrees"
+    # 1/4 周期时 sin(pi/2) = 1，角度应为 -135 + 12 = -123
+    assert abs(angle - (-123.0)) < 0.1, f"Expected ~-123 degrees, got {angle}degrees"
 
     elapsed = 0.6  # 半周期
     angle = DEFAULT_ANGLE + IDLE_AMPLITUDE * math.sin(elapsed * 2 * math.pi / IDLE_PERIOD)
-    # 半周期时 sin(pi) = 0，角度应为 -45
+    # 半周期时 sin(pi) = 0，角度应为 -135
     assert abs(angle - DEFAULT_ANGLE) < 0.1, f"Expected ~{DEFAULT_ANGLE} degrees, got {angle}degrees"
