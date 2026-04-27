@@ -12,6 +12,13 @@ from loguru import logger
 
 from drivers.win32_overlay import get_overlay
 
+# 动画效果常量
+DEFAULT_ANGLE = -45.0       # 光标默认指向（左上）
+IDLE_AMPLITUDE = 6.0        # 静止晃动幅度（+-度）
+IDLE_PERIOD = 1.0           # 静止晃动周期（秒）
+IDLE_FPS = 30               # 静止晃动帧率
+RETURN_DURATION = 0.3       # 归位旋转时长（秒）
+
 
 class BezierCurve:
     """三次贝塞尔曲线"""
@@ -61,12 +68,30 @@ class VirtualCursor:
         self._current_pos = (0, 0)
         self._running = False
         self._lock = threading.Lock()
+        self._current_angle = DEFAULT_ANGLE
+        self._idle_thread: Optional[threading.Thread] = None
+        self._idle_running = False
 
     @property
     def overlay(self):
         if self._overlay is None or (hasattr(self._overlay, 'hwnd') and self._overlay.hwnd == 0):
             self._overlay = get_overlay()
         return self._overlay
+
+    @staticmethod
+    def _calc_tangent_angle(curve: BezierCurve, t: float) -> float:
+        """计算贝塞尔曲线上 t 点的切线方向角度（数学坐标系，CCW from x-axis）"""
+        import math
+        delta = 0.001
+        t1 = max(0.0, t - delta)
+        t2 = min(1.0, t + delta)
+        x1, y1 = curve.point_at(t1)
+        x2, y2 = curve.point_at(t2)
+        dx = x2 - x1
+        dy = y2 - y1
+        if abs(dx) < 0.001 and abs(dy) < 0.001:
+            return DEFAULT_ANGLE
+        return math.degrees(math.atan2(-dy, dx))
 
     def _generate_curve(self, x1: float, y1: float, x2: float, y2: float) -> BezierCurve:
         """
