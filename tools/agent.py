@@ -1,5 +1,5 @@
 """
-Agent 控制工具
+Agent 状态控制工具 - 每轮必须调用其中之一
 """
 from langchain_core.tools import tool
 
@@ -7,10 +7,7 @@ from langchain_core.tools import tool
 @tool
 def finish() -> str:
     """
-    标记任务已完成，代理将成功结束。
-
-    只有当任务目标已经完全达成时才能调用此工具。
-    调用此工具表示代理工作完成，不需要再执行任何操作。
+    任务已完成。当你确认屏幕上的状态已达成任务目标时，调用此工具结束任务。
 
     返回:
         TASK_COMPLETED
@@ -21,12 +18,10 @@ def finish() -> str:
 @tool
 def continue_steps(reason: str) -> str:
     """
-    继续执行下一步操作。
-
-    当你完成了当前步骤，需要继续执行更多操作才能完成整体任务时调用此工具。
+    当前步已执行，继续下一步。每轮操作后必须调用此工具或 retry 或 finish。
 
     参数:
-        reason: 简短说明下一步要做什么
+        reason: 简短描述本轮做了什么（只说当前步，不要说未来计划）
 
     返回:
         CONTINUE
@@ -37,12 +32,10 @@ def continue_steps(reason: str) -> str:
 @tool
 def retry(reason: str) -> str:
     """
-    重试当前操作。
-
-    当上一步操作没有达到预期效果，需要重新尝试时调用此工具。
+    上一步未达到预期效果，用不同方式重试。
 
     参数:
-        reason: 简短说明重试的原因和要调整的策略
+        reason: 简短说明失败原因和调整策略
 
     返回:
         RETRY

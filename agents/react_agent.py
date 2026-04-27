@@ -45,18 +45,23 @@ class ReactAgentLoop:
             self.output_dir.mkdir(parents=True, exist_ok=True)
         self.max_steps = max_steps
         self.history_window = history_window
+        self.task_log_path = None  # 任务日志文件路径
         self._init_llm()
 
     def _init_llm(self):
-        from config.settings import ARK_API_KEY, ARK_API_URL, ARK_VISION_MODEL
+        from config.settings import (
+            ARK_API_KEY, ARK_API_URL, ARK_VISION_MODEL,
+            LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_TOP_P
+        )
 
         # 绑定工具，LangChain 会自动处理 tool_call 格式
         self.llm = ChatOpenAI(
             model=ARK_VISION_MODEL,
             api_key=ARK_API_KEY,
             base_url=ARK_API_URL,
-            temperature=0.1,
-            max_tokens=1500,
+            temperature=LLM_TEMPERATURE,
+            max_tokens=LLM_MAX_TOKENS,
+            top_p=LLM_TOP_P,
         ).bind_tools(
             [
                 click, move_mouse, double_click, right_click, scroll, drag,
@@ -71,14 +76,12 @@ class ReactAgentLoop:
 
     def _cache_screen_info(self):
         from tools._shared import _screen_info_cache
-        if _screen_info_cache[0] is None:
-            from drivers.screen_capture import get_screen_capture
-            import cv2
-            screen = get_screen_capture()
-            img, _ = screen.auto_save(prefix="temp")
-            orig_h, orig_w = img.shape[:2]
-            _screen_info_cache[0] = {"orig_w": orig_w, "orig_h": orig_h}
-            logger.info(f"屏幕尺寸已缓存: {orig_w}x{orig_h}")
+        from drivers.screen_capture import get_screen_capture
+        screen = get_screen_capture()
+        img, _ = screen.auto_save(prefix="temp")
+        orig_h, orig_w = img.shape[:2]
+        _screen_info_cache[0] = {"orig_w": orig_w, "orig_h": orig_h}
+        logger.info(f"屏幕尺寸已更新: {orig_w}x{orig_h}")
 
     @staticmethod
     def _clean_tool_name(raw_name: str) -> str:
@@ -190,6 +193,95 @@ class ReactAgentLoop:
             return history_turns[-self.history_window:]
         return history_turns
 
+    def _update_history(self, history_turns: list, current_turn_operations: list,
+                        reason: str, state: str) -> list:
+        """
+        统一的 history 更新逻辑。
+
+        Args:
+            state: "continue" 或 "retry"
+        """
+        target_status = "success" if state == "continue" else "fail"
+        if history_turns and history_turns[-1][2] == "check":
+            r, outs, _ = history_turns[-1]
+            history_turns[-1] = (r, outs, target_status)
+
+        current_outputs = [o for _, o in current_turn_operations]
+        if current_outputs:
+            history_turns.append((reason, current_outputs, "check"))
+        return self._trim_history(history_turns)
+
+    def _log_turn_input(self, step_count: int, prev_result_text: str | None):
+        """输出每轮发给模型的完整输入信息"""
+        logger.info(f"--- Turn {step_count} HumanMessage ---")
+        logger.info(f"Task: {self.goal}")
+        logger.info(f"Screenshot: [base64 image attached]")
+        if prev_result_text:
+            logger.info(f"Previous result:\n{prev_result_text}")
+        else:
+            logger.info(f"Previous result: (none)")
+        logger.info(f"--- End HumanMessage ---")
+
+    def _init_task_log(self):
+        """初始化任务日志文件"""
+        if not self.output_dir:
+            return None
+        import hashlib
+        from datetime import datetime
+        # 用 goal 的哈希和时间戳命名，避免重复
+        goal_hash = hashlib.md5(self.goal.encode()).hexdigest()[:8]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = self.output_dir / f"task_{timestamp}_{goal_hash}.txt"
+        # 写入任务头
+        header = [
+            f"=== Task Log ===",
+            f"Goal: {self.goal}",
+            f"Started: {datetime.now().isoformat()}",
+            f"Max steps: {self.max_steps}",
+            "=" * 50,
+            "",
+        ]
+        log_file.write_text("\n".join(header), encoding="utf-8")
+        return log_file
+
+    def _append_turn_log(self, step_count: int, prev_result_text: str | None,
+                         response_content: str, tool_calls_summary: str):
+        """追加每轮日志到任务日志文件"""
+        if not self.task_log_path:
+            return
+        lines = [
+            f"\n=== Turn {step_count} ===",
+            f"\n--- INPUT ---",
+            f"Screenshot: [attached]",
+        ]
+        if prev_result_text:
+            lines.append(f"Previous result:\n{prev_result_text}")
+        else:
+            lines.append(f"Previous result: (none)")
+        lines.append(f"\n--- OUTPUT ---")
+        lines.append(f"Content: {response_content}")
+        lines.append(f"Tool calls:\n{tool_calls_summary}")
+        # 追加模式
+        with open(self.task_log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
+    def _finalize_task_log(self, result: ReactResult):
+        """写入任务结果到日志文件"""
+        if not self.task_log_path:
+            return
+        from datetime import datetime
+        lines = [
+            "\n" + "=" * 50,
+            f"=== Task Complete ===",
+            f"Success: {result.success}",
+            f"Total steps: {result.total_steps}",
+            f"Final message: {result.final_message}",
+            f"Error reason: {result.error_reason or 'none'}",
+            f"Finished: {datetime.now().isoformat()}",
+        ]
+        with open(self.task_log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+
     def run(self) -> ReactResult:
         """
         多工具调用模式：
@@ -206,6 +298,9 @@ class ReactAgentLoop:
         logger.info(f"ReActAgentLoop 开始 | Goal: {self.goal[:50]}")
 
         try:
+            # 初始化任务日志
+            self.task_log_path = self._init_task_log()
+
             # history_turns: list of (reason, [tool_outputs], status)
             # 每个元素代表一轮操作，status 对该轮所有 outputs 统一生效
             history_turns = []
@@ -217,9 +312,20 @@ class ReactAgentLoop:
 
             while step_count < self.max_steps:
                 step_count += 1
-                logger.info(f"\n=== Turn {step_count} ===")
 
                 prev_result_text = self._build_prev_result(history_turns)
+
+                logger.info(f"\n{'='*50}")
+                logger.info(f"=== Turn {step_count}/{self.max_steps} ===")
+                logger.info(f"{'='*50}")
+                logger.info(f"[INPUT] Task: {self.goal}")
+                logger.info(f"[INPUT] Screenshot: [base64 image attached]")
+                if prev_result_text:
+                    logger.info(f"[INPUT] Previous result:\n{prev_result_text}")
+                else:
+                    logger.info(f"[INPUT] Previous result: (首轮，无历史)")
+                logger.info(f"{'='*50}")
+
                 if prev_result_text:
                     user_content = [
                         {"type": "text", "text": f"Task: {self.goal}"},
@@ -246,16 +352,22 @@ class ReactAgentLoop:
                     continue
 
                 content = response.content if hasattr(response, 'content') and response.content else ""
-                logger.info(f"LLM 响应: {content[:200] if content else 'No content'}")
+                logger.info(f"[OUTPUT] LLM content: {content[:300] if content else '(empty)'}")
 
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
-                    return ReactResult(
+                    logger.info(f"[OUTPUT] Tool calls: (none)")
+                    result = ReactResult(
                         goal=self.goal,
                         success=False,
                         total_steps=step_count,
                         final_message=content or "No tool calls",
                         error_reason="模型未调用任何工具"
                     )
+                    self._finalize_task_log(result)
+                    return result
+
+                tc_names = [self._clean_tool_name(tc.get("name", "")) for tc in response.tool_calls]
+                logger.info(f"[OUTPUT] Tool calls: {tc_names}")
 
                 current_turn_operations = []
 
@@ -263,67 +375,74 @@ class ReactAgentLoop:
                     tool_name = self._clean_tool_name(tc.get("name", ""))
                     tool_args = self._clean_tool_args(tc.get("args", {}))
 
-                    logger.info(f"执行工具: {tool_name}({tool_args})")
+                    logger.info(f"  -> 执行: {tool_name}({tool_args})")
                     result = self._execute_tool(tool_name, tool_args)
-                    logger.info(f"工具结果: {result}")
+                    logger.info(f"  <- 结果: {result}")
 
                     screenshot_data = screenshot.func()
                     screenshot_url = screenshot_data["image"]
 
                     if tool_name == "finish":
-                        return ReactResult(
+                        finish_result = ReactResult(
                             goal=self.goal,
                             success=True,
                             total_steps=step_count,
                             final_message="任务已完成"
                         )
+                        self._append_turn_log(step_count, prev_result_text, content, str(tc_names))
+                        self._finalize_task_log(finish_result)
+                        return finish_result
 
                     elif tool_name == "continue_steps":
                         reason = tool_args.get('reason', '')
-                        if history_turns and history_turns[-1][2] == "check":
-                            r, outs, _ = history_turns[-1]
-                            history_turns[-1] = (r, outs, "success")
-                        current_outputs = [o for _, o in current_turn_operations]
-                        history_turns.append((reason, current_outputs, "check"))
-                        history_turns = self._trim_history(history_turns)
+                        history_turns = self._update_history(
+                            history_turns, current_turn_operations, reason, "continue"
+                        )
 
                     elif tool_name == "retry":
                         reason = tool_args.get('reason', '')
-                        if history_turns and history_turns[-1][2] == "check":
-                            r, outs, _ = history_turns[-1]
-                            history_turns[-1] = (r, outs, "fail")
-                        current_outputs = [o for _, o in current_turn_operations]
-                        history_turns.append((reason, current_outputs, "check"))
-                        history_turns = self._trim_history(history_turns)
+                        history_turns = self._update_history(
+                            history_turns, current_turn_operations, reason, "retry"
+                        )
 
                     else:
                         current_turn_operations.append((tool_name, result))
+
+                self._append_turn_log(step_count, prev_result_text, content, str(tc_names))
 
                 last_tool = self._clean_tool_name(
                     response.tool_calls[-1].get("name", "")
                 )
                 if last_tool not in STATE_TOOLS:
-                    logger.warning(f"模型未调用状态工具，自动添加 continue_steps")
+                    logger.warning(f"模型未调用状态工具，自动补入 continue_steps")
+                    history_turns = self._update_history(
+                        history_turns, current_turn_operations,
+                        "(auto) 模型未给出状态判断", "continue"
+                    )
                     screenshot_data = screenshot.func()
                     screenshot_url = screenshot_data["image"]
                     continue
 
-            return ReactResult(
+            result = ReactResult(
                 goal=self.goal,
                 success=False,
                 total_steps=step_count,
                 final_message="达到最大步数限制",
                 error_reason="达到最大步数限制"
             )
+            self._finalize_task_log(result)
+            return result
 
         except Exception as e:
             logger.error(f"ReAct 代理执行失败: {e}")
             import traceback
             traceback.print_exc()
-            return ReactResult(
+            result = ReactResult(
                 goal=self.goal,
                 success=False,
                 total_steps=0,
                 final_message="",
                 error_reason=str(e)
             )
+            self._finalize_task_log(result)
+            return result
