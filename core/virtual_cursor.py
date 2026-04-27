@@ -189,7 +189,7 @@ class VirtualCursor:
         # 归位旋转 → 启动 idle 晃动
         self._return_rotation(last_angle)
         # _start_idle_animation() will be added in Task 6 — leave a comment
-        # self._start_idle_animation()  # TODO: uncomment in Task 6
+        self._start_idle_animation()
 
         if callback:
             callback()
@@ -214,14 +214,44 @@ class VirtualCursor:
             if remaining > 0:
                 time.sleep(remaining)
 
+    def _start_idle_animation(self):
+        """启动静止晃动后台线程"""
+        self._idle_running = True
+        self._idle_thread = threading.Thread(target=self._idle_loop, daemon=True)
+        self._idle_thread.start()
+
+    def _stop_idle_animation(self):
+        """停止静止晃动线程"""
+        self._idle_running = False
+        if self._idle_thread and self._idle_thread.is_alive():
+            self._idle_thread.join(timeout=0.5)
+        self._idle_thread = None
+
+    def _idle_loop(self):
+        """静止晃动循环（在 daemon 线程中运行）"""
+        import math
+        start_time = time.perf_counter()
+        while self._idle_running:
+            elapsed = time.perf_counter() - start_time
+            angle = DEFAULT_ANGLE + IDLE_AMPLITUDE * math.sin(
+                elapsed * 2 * math.pi / IDLE_PERIOD
+            )
+            self._current_angle = angle
+            self.overlay.set_angle(angle)
+            time.sleep(1.0 / IDLE_FPS)
+
     def set_position(self, x: int, y: int):
-        """直接设置光标位置（无动画）"""
+        """直接设置光标位置（无动画），之后启动 idle 晃动"""
+        self._stop_idle_animation()
         self._current_pos = (x, y)
         self.overlay.show()
+        self.overlay.set_angle(DEFAULT_ANGLE)
         self.overlay.move_cursor(x, y)
+        self._start_idle_animation()
 
     def hide(self):
         """隐藏虚拟光标"""
+        self._stop_idle_animation()
         self.overlay.hide()
 
     def get_position(self) -> tuple[int, int]:
@@ -229,9 +259,9 @@ class VirtualCursor:
         return self._current_pos
 
     def stop(self):
-        """立即停止当前动画"""
+        """立即停止当前动画和 idle 晃动"""
         self._running = False
-        # 等待一小段时间让动画线程有机会退出
+        self._stop_idle_animation()
         time.sleep(0.1)
 
     def _pump_messages(self):
