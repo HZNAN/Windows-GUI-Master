@@ -308,6 +308,93 @@ class Win32Overlay:
 
         return 0
 
+    def _create_hicon_from_image(self, img: Image.Image) -> int:
+        """从 PIL Image 直接创建 HICON（纯内存，无文件 I/O，用于批量缓存构建）"""
+        from ctypes import windll, c_short, c_uint, c_long, Structure, sizeof, c_void_p, byref, cast, POINTER
+        import struct
+
+        size = 24
+
+        # 准备 BGRA 数据（上下翻转，因为 DIB 是 bottom-up）
+        pixels = []
+        for y in range(size - 1, -1, -1):
+            for x in range(size):
+                r, g, b, a = img.getpixel((x, y))
+                pixels.extend([b, g, r, a])
+
+        class BITMAPINFOHEADER(Structure):
+            _fields_ = [
+                ('biSize', c_uint), ('biWidth', c_long), ('biHeight', c_long),
+                ('biPlanes', c_short), ('biBitCount', c_short), ('biCompression', c_uint),
+                ('biSizeImage', c_uint), ('biXPelsPerMeter', c_long),
+                ('biYPelsPerMeter', c_long), ('biClrUsed', c_uint), ('biClrImportant', c_uint),
+            ]
+
+        hdc = windll.gdi32.CreateCompatibleDC(0)
+
+        bmi_color = BITMAPINFOHEADER()
+        bmi_color.biSize = 40
+        bmi_color.biWidth = size
+        bmi_color.biHeight = size * 2
+        bmi_color.biPlanes = 1
+        bmi_color.biBitCount = 32
+        bmi_color.biCompression = 0  # BI_RGB
+        bmi_color.biSizeImage = size * size * 4
+
+        ppvBits = c_void_p()
+        hbmColor = windll.gdi32.CreateDIBSection(hdc, byref(bmi_color), 0, byref(ppvBits), None, 0)
+        if not hbmColor or not ppvBits or not ppvBits.value:
+            windll.gdi32.DeleteDC(hdc)
+            return 0
+
+        # 复制像素数据到 DIB
+        img_size = size * size
+        pPixels = cast(ppvBits, POINTER(c_long * img_size)).contents
+        for i in range(img_size):
+            offset = i * 4
+            pPixels[i] = struct.unpack('<I', bytes(pixels[offset:offset+4]))[0]
+
+        # 创建 AND mask（全 0xFF 表示全不透明，由 color 的 alpha 决定）
+        bmi_mask = BITMAPINFOHEADER()
+        bmi_mask.biSize = 40
+        bmi_mask.biWidth = size
+        bmi_mask.biHeight = size
+        bmi_mask.biPlanes = 1
+        bmi_mask.biBitCount = 1
+        bmi_mask.biCompression = 0
+        bmi_mask.biSizeImage = size * size // 8
+
+        ppvMask = c_void_p()
+        hbmMask = windll.gdi32.CreateDIBSection(hdc, byref(bmi_mask), 0, byref(ppvMask), None, 0)
+        if hbmMask and ppvMask and ppvMask.value:
+            from ctypes import c_ubyte
+            mask_size = size * size // 8
+            pMask = cast(ppvMask, POINTER(c_ubyte * mask_size)).contents
+            for i in range(mask_size):
+                pMask[i] = 0xFF
+
+        class ICONINFO(Structure):
+            _fields_ = [
+                ('fIcon', c_uint), ('xHotspot', c_uint), ('yHotspot', c_uint),
+                ('hbmMask', c_void_p), ('hbmColor', c_void_p),
+            ]
+
+        ii = ICONINFO()
+        ii.fIcon = 0
+        ii.xHotspot = 0
+        ii.yHotspot = 0
+        ii.hbmMask = hbmMask if hbmMask else None
+        ii.hbmColor = hbmColor
+
+        hicon = windll.user32.CreateIconIndirect(byref(ii))
+
+        if hbmMask:
+            windll.gdi32.DeleteObject(hbmMask)
+        windll.gdi32.DeleteObject(hbmColor)
+        windll.gdi32.DeleteDC(hdc)
+
+        return hicon
+
     def _create_window_class(self) -> str:
         """注册窗口类"""
         class_name = "VirtualCursorOverlay"
