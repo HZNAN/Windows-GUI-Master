@@ -313,7 +313,7 @@ class Win32Overlay:
 
     def _create_hicon_from_image(self, img: Image.Image) -> int:
         """从 PIL Image 直接创建 HICON（纯内存，无文件 I/O，用于批量缓存构建）"""
-        from ctypes import windll, c_uint, c_long, Structure, c_void_p, byref, cast, POINTER
+        from ctypes import windll, c_short, c_uint, c_long, Structure, c_void_p, byref, cast, POINTER
 
         size = self._size
 
