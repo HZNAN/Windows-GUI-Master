@@ -422,6 +422,9 @@ class Win32Overlay:
         hwnd = self.hwnd
         dc, ps = win32gui.BeginPaint(hwnd)
 
+        # 填充黑色背景（LWA_COLORKEY 使黑色透明），清除上一帧残留
+        win32gui.PatBlt(dc, 0, 0, self._size, self._size, win32con.BLACKNESS)
+
         # 使用当前光标类型的 HICON
         if self.cursor_hicon:
             win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon, 24, 24, 0, None, win32con.DI_NORMAL)
