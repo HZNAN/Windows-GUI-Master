@@ -403,6 +403,7 @@ class Win32Overlay:
 
     def _build_angle_cache(self, cursor_type: str):
         """为一个光标类型预生成 120 个旋转 HICON（每 3° 一个）"""
+        logger.info(f"Building angle cache for '{cursor_type}' (120 HICONs)...")
         if cursor_type not in self._source_images:
             img = self._create_cursor_image(cursor_type)
             self._source_images[cursor_type] = img
@@ -416,6 +417,7 @@ class Win32Overlay:
             if hicon:
                 cache[deg] = hicon
         self._angle_cache[cursor_type] = cache
+        logger.info(f"Angle cache for '{cursor_type}' built: {len(cache)} HICONs cached")
 
     def _get_cached_hicon(self, cursor_type: str, angle: float) -> int:
         """获取最接近角度的缓存 HICON，必要时懒构建缓存"""
