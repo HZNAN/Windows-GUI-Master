@@ -221,6 +221,15 @@ all_pass &= check_cursor_unchanged(original, "未移动")
 # ============================================================
 prompt("Test 9: 中文文本注入（剪贴板粘贴）")
 
+print("请输入记事本标题栏的屏幕坐标 (x y)（切换回记事本）：")
+coords = input("> ").strip().split()
+nx, ny = int(coords[0]), int(coords[1])
+
+print(f"注入 click ({nx}, {ny}) 重新激活记事本")
+injector.click(nx, ny)
+time.sleep(0.3)
+
+print("注入 Enter 换行 + 中文 type_text")
 injector.press_key("enter")
 time.sleep(0.1)
 injector.press_key("enter")
