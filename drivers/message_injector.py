@@ -22,7 +22,12 @@ WM_MOUSEMOVE = 0x0200
 WM_MOUSEWHEEL = 0x020A
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
+WM_CHAR = 0x0102
 WM_SETFOCUS = 0x0007
+WM_PASTE = 0x0302
+WM_COPY = 0x0301
+WM_CUT = 0x0300
+EM_SETSEL = 0x00B1
 WHEEL_DELTA = 120
 MK_LBUTTON = 0x0001
 MK_RBUTTON = 0x0002
@@ -175,13 +180,18 @@ class MessageInjector:
         logger.debug(f"注入释放: btn={button}")
 
     def type_text(self, text: str):
-        """通过按键消息注入文本（ASCII），中文走剪贴板粘贴"""
+        """注入文本：中文用剪贴板 + WM_PASTE，ASCII 用 WM_CHAR"""
+        hwnd = self._keyboard_hwnd
+        if not hwnd:
+            logger.warning("type_text: 无目标窗口")
+            return
+
         if any(ord(c) > 127 for c in text):
             import pyperclip
             old_clipboard = pyperclip.paste()
             pyperclip.copy(text)
             time.sleep(0.1)
-            self.hotkey("ctrl", "v")
+            _send_message(hwnd, WM_PASTE, 0, 0)
             time.sleep(0.1)
             try:
                 pyperclip.copy(old_clipboard)
@@ -189,9 +199,8 @@ class MessageInjector:
                 pass
         else:
             for ch in text:
-                vk = _char_to_vk(ch)
-                if vk:
-                    self._post_key(vk)
+                _send_message(hwnd, WM_CHAR, ord(ch), 0)
+                time.sleep(0.01)
         logger.debug(f"注入文本: {text[:20]}{'...' if len(text) > 20 else ''}")
 
     def press_key(self, key: str):
