@@ -46,6 +46,10 @@ user32.SendMessageTimeoutW.argtypes = [
     ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
 ]
 user32.SendMessageTimeoutW.restype = ctypes.c_longlong
+user32.SendMessageW.argtypes = [
+    ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong,
+]
+user32.SendMessageW.restype = ctypes.c_longlong
 user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
 user32.MapVirtualKeyW.restype = ctypes.c_uint
 
