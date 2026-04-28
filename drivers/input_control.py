@@ -100,7 +100,10 @@ class InputControl:
             x, y: 目标坐标
             duration: 移动持续时间（秒），模拟人类移动速度
         """
-        pyautogui.moveTo(x, y, duration=duration)
+        if self.message_mode:
+            pass  # 消息注入模式下不移动真实光标
+        else:
+            pyautogui.moveTo(x, y, duration=duration)
         logger.debug(f"鼠标移动: ({x}, {y}), duration={duration}s")
 
     def scroll(self, x: int, y: int, amount: int = 3):
@@ -146,6 +149,42 @@ class InputControl:
             pyautogui.drag(x2 - x1, y2 - y1, duration=duration, button="left")
         logger.debug(f"鼠标拖拽: ({x1},{y1}) -> ({x2},{y2})")
 
+    def mouse_down(self, x: int, y: int, button: str = "left"):
+        if self.message_mode:
+            self._injector.mouse_down(x, y, button)
+        elif self.virtual_mode:
+            self._virtual_mouse_down(x, y, button)
+        else:
+            pyautogui.moveTo(x, y)
+            pyautogui.mouseDown(button=button)
+
+    def mouse_up(self, button: str = "left"):
+        if self.message_mode:
+            self._injector.mouse_up(button)
+        elif self.virtual_mode:
+            self._virtual_mouse_up(button)
+        else:
+            pyautogui.mouseUp(button=button)
+
+    def _virtual_mouse_down(self, x: int, y: int, button: str = "left"):
+        btn_map = {"left": 1, "right": 2, "middle": 4}
+        btn_flag = btn_map.get(button, 1)
+        self._save_cursor()
+        win32api.SetCursorPos((x, y))
+        time.sleep(0.01)
+        win32api.mouse_event(getattr(win32con, f"MOUSEEVENTF_{button.upper()}DOWN"), 0, 0, 0, 0)
+
+    def _virtual_mouse_up(self, button: str = "left"):
+        win32api.mouse_event(getattr(win32con, f"MOUSEEVENTF_{button.upper()}UP"), 0, 0, 0, 0)
+        self._restore_cursor()
+
+    def _save_cursor(self):
+        self._saved_pos = win32api.GetCursorPos()
+
+    def _restore_cursor(self):
+        if hasattr(self, '_saved_pos'):
+            win32api.SetCursorPos(self._saved_pos)
+
     # ============ 键盘操作 ============
 
     def type_text(self, text: str, interval: float = 0.05):
@@ -156,8 +195,9 @@ class InputControl:
             text: 要输入的文本
             interval: 每个字符之间的间隔（秒）
         """
-        # 检查是否包含非ASCII字符（如中文），需要用剪贴板粘贴
-        if any(ord(c) > 127 for c in text):
+        if self.message_mode:
+            self._injector.type_text(text)
+        elif any(ord(c) > 127 for c in text):
             # 使用剪贴板粘贴方式输入中文
             import pyperclip
             old_clipboard = pyperclip.paste()
@@ -186,20 +226,29 @@ class InputControl:
                  shift, ctrl, alt, esc
                  up, down, left, right, home, end, pageup, pagedown
         """
-        key_code = self._parse_key(key)
-        pyautogui.press(key_code)
+        if self.message_mode:
+            self._injector.press_key(key)
+        else:
+            key_code = self._parse_key(key)
+            pyautogui.press(key_code)
         logger.debug(f"按键: {key}")
 
     def key_down(self, key: str):
         """按下并保持（不释放）"""
-        key_code = self._parse_key(key)
-        pyautogui.keyDown(key_code)
+        if self.message_mode:
+            self._injector.key_down(key)
+        else:
+            key_code = self._parse_key(key)
+            pyautogui.keyDown(key_code)
         logger.debug(f"按键按下: {key}")
 
     def key_up(self, key: str):
         """释放按键"""
-        key_code = self._parse_key(key)
-        pyautogui.keyUp(key_code)
+        if self.message_mode:
+            self._injector.key_up(key)
+        else:
+            key_code = self._parse_key(key)
+            pyautogui.keyUp(key_code)
         logger.debug(f"按键释放: {key}")
 
     def hotkey(self, *keys: str):
@@ -209,8 +258,11 @@ class InputControl:
         Args:
             *keys: 组合键列表，如 hotkey("ctrl", "a") 全选
         """
-        parsed_keys = [self._parse_key(k) for k in keys]
-        pyautogui.hotkey(*parsed_keys)
+        if self.message_mode:
+            self._injector.hotkey(*keys)
+        else:
+            parsed_keys = [self._parse_key(k) for k in keys]
+            pyautogui.hotkey(*parsed_keys)
         logger.debug(f"组合键: {'+'.join(keys)}")
 
     # ============ 辅助方法 ============

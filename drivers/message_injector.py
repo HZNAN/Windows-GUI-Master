@@ -134,6 +134,32 @@ class MessageInjector:
         self._post(hwnd, WM_LBUTTONUP, 0, lparam)
         logger.debug(f"注入拖拽: ({x1},{y1}) -> ({x2},{y2})")
 
+    def mouse_down(self, x: int, y: int, button: str = "left"):
+        hwnd, cx, cy = self._require_window(x, y)
+        if hwnd is None:
+            return
+        self._last_click_hwnd = hwnd
+        lparam = _make_lparam(cx, cy)
+        if button == "right":
+            self._post(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, lparam)
+        elif button == "middle":
+            self._post(hwnd, WM_MBUTTONDOWN, MK_MBUTTON, lparam)
+        else:
+            self._post(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        logger.debug(f"注入按下: ({x},{y}), btn={button}")
+
+    def mouse_up(self, button: str = "left"):
+        hwnd = self._last_click_hwnd or win32gui.GetForegroundWindow()
+        if hwnd is None:
+            return
+        if button == "right":
+            self._post(hwnd, WM_RBUTTONUP, 0, 0)
+        elif button == "middle":
+            self._post(hwnd, WM_MBUTTONUP, 0, 0)
+        else:
+            self._post(hwnd, WM_LBUTTONUP, 0, 0)
+        logger.debug(f"注入释放: btn={button}")
+
     def type_text(self, text: str):
         """通过按键消息注入文本（ASCII），中文走剪贴板粘贴"""
         if any(ord(c) > 127 for c in text):

@@ -87,13 +87,12 @@ class ExecutionEngine:
                 if x is None or y is None:
                     logger.error(f"mouse_down 缺少坐标: ({x}, {y})")
                     return False
-                self.input.move_to(x, y, duration=0.1)
-                pyautogui.mouseDown(button=button)
+                self.input.mouse_down(x, y, button=button)
                 logger.info(f"执行 mouse_down: ({x}, {y})")
                 return True
 
             elif action == "mouse_up":
-                pyautogui.mouseUp(button=button)
+                self.input.mouse_up(button=button)
                 logger.info(f"执行 mouse_up, button={button}")
                 return True
 
