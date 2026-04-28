@@ -124,8 +124,10 @@ print("注入 Ctrl+C (复制)")
 injector.hotkey("ctrl", "c")
 time.sleep(0.3)
 
-print("注入 Ctrl+End + Enter (跳到末尾)")
-injector.hotkey("ctrl", "end")
+print("注入 press_key End x5 + Enter (跳到末尾)")
+for _ in range(5):
+    injector.press_key("end")
+    time.sleep(0.02)
 time.sleep(0.1)
 injector.press_key("enter")
 time.sleep(0.1)

@@ -35,6 +35,19 @@ MK_MBUTTON = 0x0010
 
 user32 = ctypes.windll.user32
 
+# 64-bit Windows 上必须设置 argtypes，否则 WPARAM/LPARAM 会被截断为 32-bit
+user32.PostMessageW.argtypes = [
+    ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong,
+]
+user32.PostMessageW.restype = ctypes.c_int
+user32.SendMessageTimeoutW.argtypes = [
+    ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong,
+    ctypes.c_uint, ctypes.c_uint, ctypes.c_void_p,
+]
+user32.SendMessageTimeoutW.restype = ctypes.c_longlong
+user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
+user32.MapVirtualKeyW.restype = ctypes.c_uint
+
 MAPVK_VK_TO_VSC = 0
 SMTO_NORMAL = 0x0000
 SENDMSG_TIMEOUT = 100  # ms
@@ -210,7 +223,29 @@ class MessageInjector:
         logger.debug(f"注入按键: {key}")
 
     def hotkey(self, *keys: str):
-        """注入组合键：按下所有键 → 释放所有键（逆序）"""
+        """注入组合键。常见快捷键用直接命令消息，通用情况用 keyboard 模拟"""
+        combo = '+'.join(k.lower().strip() for k in keys)
+        hwnd = self._keyboard_hwnd
+
+        # 常见快捷键 → 直接命令消息（绕过系统按键状态依赖）
+        if combo == "ctrl+a":
+            _send_message(hwnd, EM_SETSEL, 0, -1)
+            logger.debug(f"注入 EM_SETSEL (全选)")
+            return
+        if combo == "ctrl+c":
+            _send_message(hwnd, WM_COPY, 0, 0)
+            logger.debug(f"注入 WM_COPY (复制)")
+            return
+        if combo == "ctrl+v":
+            _send_message(hwnd, WM_PASTE, 0, 0)
+            logger.debug(f"注入 WM_PASTE (粘贴)")
+            return
+        if combo == "ctrl+x":
+            _send_message(hwnd, WM_CUT, 0, 0)
+            logger.debug(f"注入 WM_CUT (剪切)")
+            return
+
+        # 通用情况：PostMessage/SendMessage 键盘模拟
         vks = [_key_to_vk(k) for k in keys]
         for vk in vks:
             if vk:
@@ -220,7 +255,7 @@ class MessageInjector:
             if vk:
                 self._post_keyup(vk)
                 time.sleep(0.02)
-        logger.debug(f"注入组合键: {'+'.join(keys)}")
+        logger.debug(f"注入组合键: {combo}")
 
     def key_down(self, key: str):
         vk = _key_to_vk(key)
