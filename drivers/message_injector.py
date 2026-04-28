@@ -144,11 +144,9 @@ class MessageInjector:
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
         """
-        纯消息拖拽（零光标移动）：
-        1. mouse_event(LEFTDOWN, 0,0,0,0) — 设置系统按键状态（不移动光标，dx=dy=0）
-        2. PostMessage WM_LBUTTONDOWN + WM_MOUSEMOVE 链 — 目标窗口收到拖拽序列
-        3. mouse_event(LEFTUP, 0,0,0,0) — 释放系统按键状态
-        注：mouse_event 会产生一个无害的 WM_LBUTTONDOWN 在真实光标位置（桌面角落）
+        拖拽：光标瞬移至起点 → mouse_event 产生真实 WM_LBUTTONDOWN（<2ms 后恢复），
+        中间帧 PostMessage WM_MOUSEMOVE，光标瞬移至终点释放 → 恢复。
+        光标只在按下和释放瞬间各跳一次（<2ms），人眼不可见。
         """
         hwnd, cx1, cy1 = self._require_window(x1, y1)
         if hwnd is None:
@@ -156,16 +154,16 @@ class MessageInjector:
         _, cx2, cy2 = self._find_window_and_pos(x2, y2)
 
         import win32con as wc
+        original = win32api.GetCursorPos()
 
-        # 设置系统按键状态（dx=dy=0 表示不移动光标，仅按下按钮）
+        # 1. 光标瞬移至起点 → 真实 mouse_event 按下 → 立即恢复光标（<2ms 闪烁）
+        win32api.SetCursorPos((x1, y1))
         win32api.mouse_event(wc.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(0.01)
+        win32api.SetCursorPos(original)
 
-        # PostMessage WM_LBUTTONDOWN → 目标窗口
-        _send_message(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, _make_lparam(cx1, cy1))
         time.sleep(0.02)
 
-        # PostMessage WM_MOUSEMOVE 链
+        # 2. 中间帧：PostMessage WM_MOUSEMOVE（Edit 控件已进入拖拽模式，GetAsyncKeyState="按下"）
         steps = max(2, int(duration * 30))
         for i in range(1, steps + 1):
             t = i / steps
@@ -174,37 +172,31 @@ class MessageInjector:
             _send_message(hwnd, WM_MOUSEMOVE, MK_LBUTTON, _make_lparam(mx, my))
             time.sleep(duration / steps)
 
-        # PostMessage WM_LBUTTONUP → 目标窗口
+        # 3. 光标瞬移至终点 → PostMessage UP → 真实 mouse_event 释放 → 恢复光标
+        win32api.SetCursorPos((x2, y2))
         _send_message(hwnd, WM_LBUTTONUP, 0, _make_lparam(cx2, cy2))
-        time.sleep(0.01)
-
-        # 释放系统按键状态
         win32api.mouse_event(wc.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        win32api.SetCursorPos(original)
 
-        logger.debug(f"注入拖拽 (零光标移动): ({x1},{y1}) -> ({x2},{y2})")
+        logger.debug(f"注入拖拽: ({x1},{y1}) -> ({x2},{y2})")
 
     def mouse_down(self, x: int, y: int, button: str = "left"):
         hwnd, cx, cy = self._require_window(x, y)
         if hwnd is None:
             return
         self._last_click_hwnd = hwnd
+        self._mouse_up_button = button
         import win32con as wc
 
         down_flag = {"left": wc.MOUSEEVENTF_LEFTDOWN, "right": wc.MOUSEEVENTF_RIGHTDOWN,
                       "middle": wc.MOUSEEVENTF_MIDDLEDOWN}.get(button, wc.MOUSEEVENTF_LEFTDOWN)
-        up_flag = {"left": wc.MOUSEEVENTF_LEFTUP, "right": wc.MOUSEEVENTF_RIGHTUP,
-                    "middle": wc.MOUSEEVENTF_MIDDLEUP}.get(button, wc.MOUSEEVENTF_LEFTUP)
-        self._mouse_up_flag = up_flag
 
-        # mouse_event 设置系统按键状态（dx=dy=0，不移动光标）
+        # 光标瞬移至目标 → 真实 mouse_event 按下 → 立即恢复（<2ms）
+        original = win32api.GetCursorPos()
+        win32api.SetCursorPos((x, y))
         win32api.mouse_event(down_flag, 0, 0, 0, 0)
-
-        # 同时 PostMessage 到目标窗口
-        msg_down = {"left": WM_LBUTTONDOWN, "right": WM_RBUTTONDOWN,
-                     "middle": WM_MBUTTONDOWN}.get(button, WM_LBUTTONDOWN)
-        mk = {"left": MK_LBUTTON, "right": MK_RBUTTON, "middle": MK_MBUTTON}.get(button, MK_LBUTTON)
-        _send_message(hwnd, msg_down, mk, _make_lparam(cx, cy))
-        logger.debug(f"注入按下 (零光标移动): ({x},{y}), btn={button}")
+        win32api.SetCursorPos(original)
+        logger.debug(f"注入按下: ({x},{y}), btn={button}")
 
     def mouse_up(self, button: str = "left"):
         hwnd = self._last_click_hwnd or win32gui.GetForegroundWindow()
@@ -212,17 +204,10 @@ class MessageInjector:
             return
         import win32con as wc
 
-        up_flag = getattr(self, '_mouse_up_flag', wc.MOUSEEVENTF_LEFTUP)
-        msg_up = {"left": WM_LBUTTONUP, "right": WM_RBUTTONUP,
-                   "middle": WM_MBUTTONUP}.get(button, WM_LBUTTONUP)
-
-        # 先 PostMessage 到目标窗口
-        _send_message(hwnd, msg_up, 0, 0)
-        time.sleep(0.01)
-
-        # 再释放系统按键状态（dx=dy=0，不移动光标）
+        up_flag = {"left": wc.MOUSEEVENTF_LEFTUP, "right": wc.MOUSEEVENTF_RIGHTUP,
+                    "middle": wc.MOUSEEVENTF_MIDDLEUP}.get(button, wc.MOUSEEVENTF_LEFTUP)
         win32api.mouse_event(up_flag, 0, 0, 0, 0)
-        logger.debug(f"注入释放 (零光标移动): btn={button}")
+        logger.debug(f"注入释放: btn={button}")
 
     def type_text(self, text: str):
         """注入文本：中文用剪贴板 + WM_PASTE，ASCII 用 WM_CHAR"""
