@@ -158,6 +158,7 @@ class MessageInjector:
         _, cx2, cy2 = self._find_window_and_pos(x2, y2)
 
         class_name = win32gui.GetClassName(hwnd)
+        logger.info(f"drag 目标窗口: hwnd={hwnd}, class={class_name}")
         if class_name == "Edit" or class_name.startswith("RichEdit"):
             self._drag_edit(hwnd, cx1, cy1, cx2, cy2, duration)
         else:
@@ -167,36 +168,41 @@ class MessageInjector:
             )
 
     def _drag_edit(self, hwnd, cx1, cy1, cx2, cy2, duration):
-        """用 EM_CHARFROMPOS + EM_SETSEL 在 Edit 控件中选文（零光标移动）"""
+        """用 EM_CHARFROMPOS + EM_SETSEL 在 Edit 控件中选文（零光标移动）
+        EM_CHARFROMPOS 返回 DWORD: LOWORD=字符索引, HIWORD=行号"""
         lparam1 = _make_lparam(cx1, cy1)
         result1 = user32.SendMessageW(hwnd, EM_CHARFROMPOS, 0, lparam1)
-        start_char = result1 & 0xFFFFFFFF
+        dword1 = result1 & 0xFFFFFFFF
+        start_char = dword1 & 0xFFFF  # LOWORD = 字符索引
 
         lparam2 = _make_lparam(cx2, cy2)
         result2 = user32.SendMessageW(hwnd, EM_CHARFROMPOS, 0, lparam2)
-        end_char = result2 & 0xFFFFFFFF
+        dword2 = result2 & 0xFFFFFFFF
+        end_char = dword2 & 0xFFFF
 
-        if result1 == 0xFFFFFFFF or result2 == 0xFFFFFFFF:
-            logger.warning("EM_CHARFROMPOS 失败：坐标在文本区域之外")
-            return
+        logger.debug(
+            f"EM_CHARFROMPOS: ({cx1},{cy1}) -> char={start_char} (dword={dword1:#x}), "
+            f"({cx2},{cy2}) -> char={end_char} (dword={dword2:#x})"
+        )
 
-        logger.debug(f"EM_CHARFROMPOS: start_char={start_char}, end_char={end_char}")
-
-        # 逐字符移动选区（模拟拖拽动画）
+        # 动画：逐字符移动选区
         step_char = 1 if end_char >= start_char else -1
-        steps = abs(end_char - start_char)
-        if steps < 1:
-            steps = 1
-        frame_delay = duration / min(steps, 100)  # 最多 100 帧
+        char_count = abs(end_char - start_char)
+        if char_count < 1:
+            char_count = 1
+        max_frames = min(char_count, 60)
+        frame_delay = duration / max_frames
+        chars_per_frame = max(1, char_count // max_frames)
 
-        for i in range(steps + 1):
-            pos = start_char + step_char * i
+        for i in range(max_frames + 1):
+            pos = start_char + step_char * min(i * chars_per_frame, char_count)
             user32.SendMessageW(hwnd, EM_SETSEL, start_char, pos)
             if frame_delay > 0:
                 time.sleep(frame_delay)
 
+        # 精确收束
         user32.SendMessageW(hwnd, EM_SETSEL, start_char, end_char)
-        logger.debug(f"注入 Edit 拖拽选文: char {start_char} -> {end_char}")
+        logger.debug(f"EM_SETSEL: char {start_char} -> {end_char}")
 
     def mouse_down(self, x: int, y: int, button: str = "left"):
         """
