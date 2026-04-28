@@ -144,70 +144,90 @@ class MessageInjector:
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
         """
-        拖拽：光标瞬移至起点 → mouse_event 产生真实 WM_LBUTTONDOWN（<2ms 后恢复），
-        中间帧 PostMessage WM_MOUSEMOVE，光标瞬移至终点释放 → 恢复。
-        光标只在按下和释放瞬间各跳一次（<2ms），人眼不可见。
+        拖拽：Edit/RichEdit 控件用 EM_CHARFROMPOS + EM_SETSEL 精确选文，
+        完全不动真实光标。非 Edit 控件当前不支持纯消息拖拽。
         """
         hwnd, cx1, cy1 = self._require_window(x1, y1)
         if hwnd is None:
             return
         _, cx2, cy2 = self._find_window_and_pos(x2, y2)
 
-        import win32con as wc
-        original = win32api.GetCursorPos()
+        class_name = win32gui.GetClassName(hwnd)
+        if class_name == "Edit" or class_name.startswith("RichEdit"):
+            self._drag_edit(hwnd, cx1, cy1, cx2, cy2, duration)
+        else:
+            logger.warning(
+                f"纯消息拖拽不支持此类窗口: {class_name}。"
+                f"Edit/RichEdit 控件可用 EM_SETSEL，其他窗口需要真实输入。"
+            )
 
-        # 1. 光标瞬移至起点 → 真实 mouse_event 按下 → 立即恢复光标（<2ms 闪烁）
-        win32api.SetCursorPos((x1, y1))
-        win32api.mouse_event(wc.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        win32api.SetCursorPos(original)
+    def _drag_edit(self, hwnd, cx1, cy1, cx2, cy2, duration):
+        """用 EM_CHARFROMPOS + EM_SETSEL 在 Edit 控件中选文（零光标移动）"""
+        lparam1 = _make_lparam(cx1, cy1)
+        result1 = user32.SendMessageW(hwnd, EM_CHARFROMPOS, 0, lparam1)
+        start_char = result1 & 0xFFFFFFFF
 
-        time.sleep(0.02)
+        lparam2 = _make_lparam(cx2, cy2)
+        result2 = user32.SendMessageW(hwnd, EM_CHARFROMPOS, 0, lparam2)
+        end_char = result2 & 0xFFFFFFFF
 
-        # 2. 中间帧：PostMessage WM_MOUSEMOVE（Edit 控件已进入拖拽模式，GetAsyncKeyState="按下"）
-        steps = max(2, int(duration * 30))
-        for i in range(1, steps + 1):
-            t = i / steps
-            mx = int(cx1 + (cx2 - cx1) * t)
-            my = int(cy1 + (cy2 - cy1) * t)
-            _send_message(hwnd, WM_MOUSEMOVE, MK_LBUTTON, _make_lparam(mx, my))
-            time.sleep(duration / steps)
+        if result1 == 0xFFFFFFFF or result2 == 0xFFFFFFFF:
+            logger.warning("EM_CHARFROMPOS 失败：坐标在文本区域之外")
+            return
 
-        # 3. 光标瞬移至终点 → PostMessage UP → 真实 mouse_event 释放 → 恢复光标
-        win32api.SetCursorPos((x2, y2))
-        _send_message(hwnd, WM_LBUTTONUP, 0, _make_lparam(cx2, cy2))
-        win32api.mouse_event(wc.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        win32api.SetCursorPos(original)
+        logger.debug(f"EM_CHARFROMPOS: start_char={start_char}, end_char={end_char}")
 
-        logger.debug(f"注入拖拽: ({x1},{y1}) -> ({x2},{y2})")
+        # 逐字符移动选区（模拟拖拽动画）
+        step_char = 1 if end_char >= start_char else -1
+        steps = abs(end_char - start_char)
+        if steps < 1:
+            steps = 1
+        frame_delay = duration / min(steps, 100)  # 最多 100 帧
+
+        for i in range(steps + 1):
+            pos = start_char + step_char * i
+            user32.SendMessageW(hwnd, EM_SETSEL, start_char, pos)
+            if frame_delay > 0:
+                time.sleep(frame_delay)
+
+        user32.SendMessageW(hwnd, EM_SETSEL, start_char, end_char)
+        logger.debug(f"注入 Edit 拖拽选文: char {start_char} -> {end_char}")
 
     def mouse_down(self, x: int, y: int, button: str = "left"):
+        """
+        纯消息 mouse_down：Edit 控件等同设置光标位置。
+        非 Edit 控件不支持纯消息"按住"操作（需系统输入管道）。
+        """
         hwnd, cx, cy = self._require_window(x, y)
         if hwnd is None:
             return
         self._last_click_hwnd = hwnd
-        self._mouse_up_button = button
-        import win32con as wc
 
-        down_flag = {"left": wc.MOUSEEVENTF_LEFTDOWN, "right": wc.MOUSEEVENTF_RIGHTDOWN,
-                      "middle": wc.MOUSEEVENTF_MIDDLEDOWN}.get(button, wc.MOUSEEVENTF_LEFTDOWN)
-
-        # 光标瞬移至目标 → 真实 mouse_event 按下 → 立即恢复（<2ms）
-        original = win32api.GetCursorPos()
-        win32api.SetCursorPos((x, y))
-        win32api.mouse_event(down_flag, 0, 0, 0, 0)
-        win32api.SetCursorPos(original)
-        logger.debug(f"注入按下: ({x},{y}), btn={button}")
+        class_name = win32gui.GetClassName(hwnd)
+        if class_name == "Edit" or class_name.startswith("RichEdit"):
+            msg_down = {"left": WM_LBUTTONDOWN, "right": WM_RBUTTONDOWN,
+                         "middle": WM_MBUTTONDOWN}.get(button, WM_LBUTTONDOWN)
+            mk = {"left": MK_LBUTTON, "right": MK_RBUTTON,
+                  "middle": MK_MBUTTON}.get(button, MK_LBUTTON)
+            _send_message(hwnd, msg_down, mk, _make_lparam(cx, cy))
+            logger.debug(f"注入按下 (Edit): ({x},{y}), btn={button}")
+        else:
+            logger.warning(
+                f"纯消息 mouse_down 不支持此类窗口: {class_name}。"
+                f"Edit 控件可用，其他窗口需要真实输入。"
+            )
 
     def mouse_up(self, button: str = "left"):
+        """
+        纯消息 mouse_up：发送 WM_LBUTTONUP 到目标窗口。
+        """
         hwnd = self._last_click_hwnd or win32gui.GetForegroundWindow()
         if hwnd is None:
             return
-        import win32con as wc
-
-        up_flag = {"left": wc.MOUSEEVENTF_LEFTUP, "right": wc.MOUSEEVENTF_RIGHTUP,
-                    "middle": wc.MOUSEEVENTF_MIDDLEUP}.get(button, wc.MOUSEEVENTF_LEFTUP)
-        win32api.mouse_event(up_flag, 0, 0, 0, 0)
-        logger.debug(f"注入释放: btn={button}")
+        msg_up = {"left": WM_LBUTTONUP, "right": WM_RBUTTONUP,
+                   "middle": WM_MBUTTONUP}.get(button, WM_LBUTTONUP)
+        _send_message(hwnd, msg_up, 0, 0)
+        logger.debug(f"注入释放 (消息): btn={button}")
 
     def type_text(self, text: str):
         """注入文本：中文用剪贴板 + WM_PASTE，ASCII 用 WM_CHAR"""
