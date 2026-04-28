@@ -18,8 +18,14 @@ class ExecutionEngine:
     """
 
     def __init__(self):
+        from config.settings import INPUT_MODE
         self.screen = get_screen_capture()
-        self.input = InputControl(virtual_mode=True)
+        if INPUT_MODE == "message":
+            self.input = InputControl(message_mode=True)
+        elif INPUT_MODE == "virtual":
+            self.input = InputControl(virtual_mode=True)
+        else:
+            self.input = InputControl()
         self._virtual_cursor = get_virtual_cursor()
 
     def execute(self, action: str, x: int | None = None, y: int | None = None,
@@ -106,6 +112,7 @@ class ExecutionEngine:
                 if x is None or y is None or x2 is None or y2 is None:
                     logger.error(f"drag 缺少坐标: ({x}, {y}) -> ({x2}, {y2})")
                     return False
+                self._virtual_cursor.move_to(x2, y2)
                 self.input.drag(x, y, x2, y2, duration=duration)
                 logger.info(f"执行 drag: ({x}, {y}) -> ({x2}, {y2})")
                 return True
