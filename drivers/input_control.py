@@ -137,6 +137,8 @@ class InputControl:
         拖拽从 (x1, y1) 到 (x2, y2)
         """
         if self.message_mode:
+            self._injector.drag(x1, y1, x2, y2, duration)
+        elif self.virtual_mode:
             self._save_cursor()
             win32api.SetCursorPos((x1, y1))
             time.sleep(0.02)
@@ -150,10 +152,7 @@ class InputControl:
 
     def mouse_down(self, x: int, y: int, button: str = "left"):
         if self.message_mode:
-            self._save_cursor()
-            win32api.SetCursorPos((x, y))
-            time.sleep(0.02)
-            pyautogui.mouseDown(button=button)
+            self._injector.mouse_down(x, y, button)
         elif self.virtual_mode:
             self._virtual_mouse_down(x, y, button)
         else:
@@ -162,8 +161,7 @@ class InputControl:
 
     def mouse_up(self, button: str = "left"):
         if self.message_mode:
-            pyautogui.mouseUp(button=button)
-            self._restore_cursor()
+            self._injector.mouse_up(button)
         elif self.virtual_mode:
             self._virtual_mouse_up(button)
         else:

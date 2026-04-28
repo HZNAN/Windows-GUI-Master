@@ -47,8 +47,6 @@ user32.SendMessageTimeoutW.argtypes = [
 user32.SendMessageTimeoutW.restype = ctypes.c_longlong
 user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
 user32.MapVirtualKeyW.restype = ctypes.c_uint
-user32.AttachThreadInput.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_int]
-user32.AttachThreadInput.restype = ctypes.c_int
 
 MAPVK_VK_TO_VSC = 0
 SMTO_NORMAL = 0x0000
@@ -86,40 +84,6 @@ class MessageInjector:
 
     def __init__(self):
         self._last_click_hwnd = None
-        self._capture_hwnd = None
-
-    def _attach_thread(self, hwnd: int) -> bool:
-        """将当前线程附加到目标窗口的线程（跨线程 SetCapture 的前提）"""
-        import win32process
-        target_tid, _ = win32process.GetWindowThreadProcessId(hwnd)
-        our_tid = win32api.GetCurrentThreadId()
-        if target_tid == our_tid:
-            return True  # 同线程，无需附加
-        return bool(user32.AttachThreadInput(our_tid, target_tid, True))
-
-    def _detach_thread(self, hwnd: int):
-        """解除线程附加"""
-        import win32process
-        target_tid, _ = win32process.GetWindowThreadProcessId(hwnd)
-        our_tid = win32api.GetCurrentThreadId()
-        if target_tid != our_tid:
-            user32.AttachThreadInput(our_tid, target_tid, False)
-
-    def _begin_capture(self, hwnd: int, x: int, y: int):
-        """线程附加 + SetCapture — 开始鼠标捕获"""
-        if not self._attach_thread(hwnd):
-            logger.warning(f"AttachThreadInput 失败: hwnd={hwnd}")
-            return False
-        self._capture_hwnd = hwnd
-        win32gui.SetCapture(hwnd)
-        return True
-
-    def _end_capture(self):
-        """ReleaseCapture + 线程解附"""
-        if self._capture_hwnd:
-            win32gui.ReleaseCapture()
-            self._detach_thread(self._capture_hwnd)
-            self._capture_hwnd = None
 
     def _find_window_and_pos(self, x: int, y: int):
         """找到坐标下的窗口，返回 (hwnd, client_x, client_y)；未找到返回 (None, 0, 0)"""
@@ -179,37 +143,41 @@ class MessageInjector:
         logger.debug(f"注入滚动: ({x},{y}), amount={amount}")
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
+        """
+        拖拽：用 mouse_event 设置系统按钮状态（GetAsyncKeyState 会返回"按下"），
+        中间帧用 PostMessage 投递 WM_MOUSEMOVE（不动真实光标）。
+        光标只在起始和结束各瞬移一次。
+        """
         hwnd, cx1, cy1 = self._require_window(x1, y1)
         if hwnd is None:
             return
         _, cx2, cy2 = self._find_window_and_pos(x2, y2)
 
-        # 线程附加 + SetCapture（跨线程拖拽的前提）
-        if not self._begin_capture(hwnd, cx1, cy1):
-            return
-        try:
-            # 按下
-            lparam = _make_lparam(cx1, cy1)
-            _send_message(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-            time.sleep(0.02)
+        import win32con as wc
+        original_pos = win32api.GetCursorPos()
 
-            # 移动（SendMessage 同步投递，确保顺序）
-            steps = max(2, int(duration * 30))
-            for i in range(1, steps + 1):
-                t = i / steps
-                mx = int(cx1 + (cx2 - cx1) * t)
-                my = int(cy1 + (cy2 - cy1) * t)
-                user32.SendMessageTimeoutW(
-                    hwnd, WM_MOUSEMOVE, MK_LBUTTON, _make_lparam(mx, my),
-                    0, 100, None
-                )
-                time.sleep(duration / steps)
+        # 1. 光标移到起点 → mouse_event 按下（设置系统按键状态）
+        win32api.SetCursorPos((x1, y1))
+        time.sleep(0.01)
+        win32api.mouse_event(wc.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(0.02)
 
-            # 释放
-            lparam = _make_lparam(cx2, cy2)
-            _send_message(hwnd, WM_LBUTTONUP, 0, lparam)
-        finally:
-            self._end_capture()
+        # 2. 中间帧：PostMessage WM_MOUSEMOVE（GetAsyncKeyState 返回"按住"，控件正常跟踪拖拽）
+        steps = max(2, int(duration * 30))
+        for i in range(1, steps + 1):
+            t = i / steps
+            mx = int(cx1 + (cx2 - cx1) * t)
+            my = int(cy1 + (cy2 - cy1) * t)
+            _send_message(hwnd, WM_MOUSEMOVE, MK_LBUTTON, _make_lparam(mx, my))
+            time.sleep(duration / steps)
+
+        # 3. 光标移到终点 → mouse_event 释放 → 恢复光标
+        win32api.SetCursorPos((x2, y2))
+        time.sleep(0.01)
+        win32api.mouse_event(wc.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.02)
+        win32api.SetCursorPos(original_pos)
+
         logger.debug(f"注入拖拽: ({x1},{y1}) -> ({x2},{y2})")
 
     def mouse_down(self, x: int, y: int, button: str = "left"):
@@ -217,30 +185,30 @@ class MessageInjector:
         if hwnd is None:
             return
         self._last_click_hwnd = hwnd
-        # 设置鼠标捕获（跨线程需要 AttachThreadInput）
-        self._begin_capture(hwnd, cx, cy)
-        self._capture_button = button
-        lparam = _make_lparam(cx, cy)
-        if button == "right":
-            _send_message(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, lparam)
-        elif button == "middle":
-            _send_message(hwnd, WM_MBUTTONDOWN, MK_MBUTTON, lparam)
-        else:
-            _send_message(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        import win32con as wc
+
+        self._saved_cursor = win32api.GetCursorPos()
+        win32api.SetCursorPos((x, y))
+        time.sleep(0.01)
+
+        btn_flag = {"left": wc.MOUSEEVENTF_LEFTDOWN, "right": wc.MOUSEEVENTF_RIGHTDOWN,
+                     "middle": wc.MOUSEEVENTF_MIDDLEDOWN}.get(button, wc.MOUSEEVENTF_LEFTDOWN)
+        win32api.mouse_event(btn_flag, 0, 0, 0, 0)
         logger.debug(f"注入按下: ({x},{y}), btn={button}")
 
     def mouse_up(self, button: str = "left"):
         hwnd = self._last_click_hwnd or win32gui.GetForegroundWindow()
         if hwnd is None:
             return
-        if button == "right":
-            _send_message(hwnd, WM_RBUTTONUP, 0, 0)
-        elif button == "middle":
-            _send_message(hwnd, WM_MBUTTONUP, 0, 0)
-        else:
-            _send_message(hwnd, WM_LBUTTONUP, 0, 0)
-        # 释放鼠标捕获
-        self._end_capture()
+        import win32con as wc
+
+        btn_flag = {"left": wc.MOUSEEVENTF_LEFTUP, "right": wc.MOUSEEVENTF_RIGHTUP,
+                     "middle": wc.MOUSEEVENTF_MIDDLEUP}.get(button, wc.MOUSEEVENTF_LEFTUP)
+        win32api.mouse_event(btn_flag, 0, 0, 0, 0)
+        time.sleep(0.02)
+
+        if hasattr(self, '_saved_cursor'):
+            win32api.SetCursorPos(self._saved_cursor)
         logger.debug(f"注入释放: btn={button}")
 
     def type_text(self, text: str):
