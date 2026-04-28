@@ -389,13 +389,24 @@ class Win32Overlay:
         return cache.get(snapped, 0)
 
     def set_angle(self, angle: float):
-        """设置光标显示角度并触发重绘"""
+        """设置光标显示角度并重绘（GetDC 直接绘制，跨线程安全）"""
         self._current_angle = angle
         hicon = self._get_cached_hicon(self._cursor_type, angle)
         if hicon:
             self.cursor_hicon = hicon
             if self.hwnd:
-                win32gui.InvalidateRect(self.hwnd, None, False)
+                self._paint_direct()
+
+    def _paint_direct(self):
+        """直接绘制到窗口 DC（不依赖消息泵，任何线程安全）"""
+        dc = win32gui.GetDC(self.hwnd)
+        try:
+            win32gui.PatBlt(dc, 0, 0, self._size, self._size, win32con.BLACKNESS)
+            if self.cursor_hicon:
+                win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon,
+                    self._size, self._size, 0, None, win32con.DI_NORMAL)
+        finally:
+            win32gui.ReleaseDC(self.hwnd, dc)
 
     def _create_window_class(self) -> str:
         """注册窗口类"""

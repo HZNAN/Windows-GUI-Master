@@ -18,6 +18,8 @@ IDLE_AMPLITUDE = 12.0       # 静止晃动幅度（+-度）
 IDLE_PERIOD = 1.2           # 静止晃动周期（秒）
 IDLE_FPS = 30               # 静止晃动帧率
 RETURN_DURATION = 0.3       # 归位旋转时长（秒）
+ROTATE_LEAD_DURATION = 0.25 # 移动前旋转预备时长（秒）
+ARC_STEP = 3.0              # 归位弧线每帧前进像素
 
 
 class BezierCurve:
@@ -149,7 +151,11 @@ class VirtualCursor:
         self._running = True
         frame_duration = 1.0 / self.fps
 
-        last_angle = self._current_angle
+        import math
+        start_angle = self._current_angle
+        rotate_lead_frames = int(ROTATE_LEAD_DURATION * self.fps)
+        init_tangent = None  # 首帧延迟计算（避开 t=0 切线不稳定）
+        drift_x, drift_y = float(start_x), float(start_y)  # 漂移累积位置
 
         for frame in range(total_frames + 1):
             if not self._running:
@@ -165,60 +171,99 @@ class VirtualCursor:
             final_x = int(px * t_eased + actual_x * (1 - t_eased))
             final_y = int(py * t_eased + actual_y * (1 - t_eased))
 
-            # 计算切线方向旋转角度，平滑过渡（处理角度回绕）
-            target_angle = self._calc_tangent_angle(curve, t_raw)
-            diff = target_angle - last_angle
-            if diff > 180:
-                diff -= 360
-            elif diff < -180:
-                diff += 360
-            angle = last_angle + diff * 0.4
-            self._current_angle = angle
-            last_angle = angle
+            # 旋转：集中在移动前期（wind-up），之后跟随切线
+            if frame <= rotate_lead_frames and rotate_lead_frames > 0:
+                if init_tangent is None:
+                    init_tangent = self._calc_tangent_angle(curve, 0.02)
+                rot_t = frame / rotate_lead_frames
+                diff = init_tangent - start_angle
+                if diff > 180: diff -= 360
+                elif diff < -180: diff += 360
+                angle = start_angle + diff * ease_in_out_cubic(rot_t)
+            else:
+                angle = self._calc_tangent_angle(curve, t_raw)
 
-            self._current_pos = (final_x, final_y)
+            self._current_angle = angle
+
+            # 圆弧：wind-up 期间顺指向前进，逐步汇入贝塞尔路径
+            if frame <= rotate_lead_frames and rotate_lead_frames > 0:
+                rot_t = frame / rotate_lead_frames
+                # 沿当前指向前进一步（累积漂移）
+                rad = math.radians(angle)
+                drift_x += ARC_STEP * math.cos(rad)
+                drift_y += ARC_STEP * math.sin(rad)
+                # 随 wind-up 推进，从漂移路径汇入贝塞尔路径
+                arc_x = int(final_x * rot_t + drift_x * (1 - rot_t))
+                arc_y = int(final_y * rot_t + drift_y * (1 - rot_t))
+            else:
+                arc_x, arc_y = final_x, final_y
+            drift_x, drift_y = float(arc_x), float(arc_y)
+
+            self._current_pos = (arc_x, arc_y)
             start_time = time.perf_counter()
 
             self.overlay.set_angle(angle)
-            self.overlay.move_cursor(final_x, final_y)
+            self.overlay.move_cursor(arc_x, arc_y)
 
             elapsed = time.perf_counter() - start_time
             remaining = frame_duration - elapsed
             if remaining > 0:
                 time.sleep(remaining)
 
+        final_angle = self._current_angle
+
         self._running = False
         self._current_pos = (x, y)
-        self.overlay.set_angle(last_angle)
+        self.overlay.set_angle(final_angle)
         self.overlay.move_cursor(x, y)
 
-        # 归位旋转 → 启动 idle 晃动
-        self._return_rotation(last_angle)
-        # _start_idle_animation() will be added in Task 6 — leave a comment
+        # 归位旋转（弧线始终围绕目标，弹簧力收束回原位）
+        self._return_rotation(final_angle, target_x=x, target_y=y)
         self._start_idle_animation()
 
         if callback:
             callback()
 
-    def _return_rotation(self, from_angle: float):
-        """从当前角度平滑旋转回默认角度"""
+    def _return_rotation(self, from_angle: float, target_x: int = 0, target_y: int = 0):
+        """从当前角度平滑旋转回默认角度。
+        每帧沿指向方向前进一小步，同时弹簧力拉向目标位置，
+        弧线围绕目标展开，动画结束时自然收束回目标。"""
+        import math
         total_frames = int(RETURN_DURATION * self.fps)
         if total_frames < 1:
             total_frames = 1
         frame_duration = 1.0 / self.fps
+        x, y = float(target_x), float(target_y)
+        SPRING = 0.3  # 弹簧系数：每帧拉回 30% 距离
 
         for frame in range(total_frames + 1):
             t_raw = frame / total_frames
             t_eased = ease_in_out_cubic(t_raw)
             angle = from_angle + (DEFAULT_ANGLE - from_angle) * t_eased
+
+            # 沿指向方向前进一步
+            rad = math.radians(angle)
+            x += ARC_STEP * math.cos(rad)
+            y += ARC_STEP * math.sin(rad)
+
+            # 弹簧力拉回目标：产生围绕目标的弧线，结束时收束
+            x += (target_x - x) * SPRING
+            y += (target_y - y) * SPRING
+
             self._current_angle = angle
+            self._current_pos = (int(x), int(y))
             self.overlay.set_angle(angle)
+
             start_time = time.perf_counter()
-            self.overlay.move_cursor(self._current_pos[0], self._current_pos[1])
+            self.overlay.move_cursor(int(x), int(y))
             elapsed = time.perf_counter() - start_time
             remaining = frame_duration - elapsed
             if remaining > 0:
                 time.sleep(remaining)
+
+        # 精确收束到目标位置
+        self.overlay.move_cursor(target_x, target_y)
+        self._current_pos = (target_x, target_y)
 
     def _start_idle_animation(self):
         """启动静止晃动后台线程"""
