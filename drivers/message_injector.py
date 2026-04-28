@@ -30,42 +30,70 @@ MK_MBUTTON = 0x0010
 
 user32 = ctypes.windll.user32
 
+MAPVK_VK_TO_VSC = 0
+
+
+def _vk_to_scancode(vk: int) -> int:
+    """虚拟键码 → 硬件扫描码"""
+    return user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+
 
 def _make_lparam(x: int, y: int) -> int:
-    return (y << 16) | (x & 0xFFFF)
+    return ((y & 0xFFFF) << 16) | (x & 0xFFFF)
 
 
 def _make_wparam(lo: int, hi: int) -> int:
-    return (hi << 16) | (lo & 0xFFFF)
+    return ((hi & 0xFFFF) << 16) | (lo & 0xFFFF)
 
 
 class MessageInjector:
     """通过 PostMessage 直接向目标窗口注入鼠标/键盘消息"""
 
+    def __init__(self):
+        self._last_click_hwnd = None
+
     def _find_window_and_pos(self, x: int, y: int):
-        """找到坐标下的最深层窗口，返回 (hwnd, client_x, client_y)"""
+        """找到坐标下的窗口，返回 (hwnd, client_x, client_y)；未找到返回 (None, 0, 0)"""
         hwnd = win32gui.WindowFromPoint((x, y))
+        if not hwnd:
+            return None, 0, 0
         cx, cy = win32gui.ScreenToClient(hwnd, (x, y))
         return hwnd, cx, cy
 
-    def click(self, x: int, y: int, button: str = "left"):
+    def _require_window(self, x: int, y: int):
+        """获取窗口句柄和客户坐标，hwnd 为 None 时记录警告"""
         hwnd, cx, cy = self._find_window_and_pos(x, y)
+        if hwnd is None:
+            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
+            return None, 0, 0
+        return hwnd, cx, cy
+
+    def click(self, x: int, y: int, button: str = "left"):
+        hwnd, cx, cy = self._require_window(x, y)
+        if hwnd is None:
+            return
+        self._last_click_hwnd = hwnd
         lparam = _make_lparam(cx, cy)
 
         if button == "right":
-            user32.PostMessageW(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, lparam)
+            self._post(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, lparam)
             time.sleep(0.02)
-            user32.PostMessageW(hwnd, WM_RBUTTONUP, 0, lparam)
+            self._post(hwnd, WM_RBUTTONUP, 0, lparam)
         elif button == "middle":
-            user32.PostMessageW(hwnd, WM_MBUTTONDOWN, MK_MBUTTON, lparam)
+            self._post(hwnd, WM_MBUTTONDOWN, MK_MBUTTON, lparam)
             time.sleep(0.02)
-            user32.PostMessageW(hwnd, WM_MBUTTONUP, 0, lparam)
+            self._post(hwnd, WM_MBUTTONUP, 0, lparam)
         else:
-            user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+            self._post(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
             time.sleep(0.02)
-            user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+            self._post(hwnd, WM_LBUTTONUP, 0, lparam)
 
         logger.debug(f"注入点击: ({x},{y}) -> hwnd={hwnd}, client=({cx},{cy}), btn={button}")
+
+    @staticmethod
+    def _post(hwnd, msg, wparam, lparam):
+        if not user32.PostMessageW(hwnd, msg, wparam, lparam):
+            logger.warning(f"PostMessage 失败: hwnd={hwnd}, msg=0x{msg:X}")
 
     def double_click(self, x: int, y: int, button: str = "left"):
         self.click(x, y, button)
@@ -74,34 +102,36 @@ class MessageInjector:
         logger.debug(f"注入双击: ({x},{y}), btn={button}")
 
     def scroll(self, x: int, y: int, amount: int = 3):
-        hwnd, cx, cy = self._find_window_and_pos(x, y)
+        hwnd, cx, cy = self._require_window(x, y)
+        if hwnd is None:
+            return
         lparam = _make_lparam(cx, cy)
         wparam = _make_wparam(0, amount * WHEEL_DELTA)
-        user32.PostMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+        self._post(hwnd, WM_MOUSEWHEEL, wparam, lparam)
         logger.debug(f"注入滚动: ({x},{y}), amount={amount}")
 
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
-        hwnd, cx1, cy1 = self._find_window_and_pos(x1, y1)
+        hwnd, cx1, cy1 = self._require_window(x1, y1)
+        if hwnd is None:
+            return
+        # 拖拽终点坐标均相对于起始窗口（同一窗口内拖拽，如文本选择）
         _, cx2, cy2 = self._find_window_and_pos(x2, y2)
 
-        # 按下
         lparam = _make_lparam(cx1, cy1)
-        user32.PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        self._post(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
         time.sleep(0.02)
 
-        # 移动（用 SendMessage 确保顺序，沿路径分多帧）
         steps = max(2, int(duration * 30))
         for i in range(1, steps + 1):
             t = i / steps
             mx = int(cx1 + (cx2 - cx1) * t)
             my = int(cy1 + (cy2 - cy1) * t)
             lparam = _make_lparam(mx, my)
-            user32.SendMessageW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam)
+            user32.SendMessageTimeoutW(hwnd, WM_MOUSEMOVE, MK_LBUTTON, lparam, 0, 100, None)
             time.sleep(duration / steps)
 
-        # 释放
         lparam = _make_lparam(cx2, cy2)
-        user32.PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam)
+        self._post(hwnd, WM_LBUTTONUP, 0, lparam)
         logger.debug(f"注入拖拽: ({x1},{y1}) -> ({x2},{y2})")
 
     def type_text(self, text: str):
@@ -159,15 +189,26 @@ class MessageInjector:
         time.sleep(0.02)
         self._post_keyup(vk)
 
+    @property
+    def _keyboard_hwnd(self):
+        """键盘消息目标窗口：优先上次点击窗口，否则前台窗口"""
+        return self._last_click_hwnd or win32gui.GetForegroundWindow()
+
     def _post_keydown(self, vk: int):
-        hwnd = win32gui.GetForegroundWindow()
-        lparam = (1 << 0) | (0x0E << 16)  # repeat=1, scancode=0x0E
-        user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lparam)
+        hwnd = self._keyboard_hwnd
+        scan = _vk_to_scancode(vk)
+        # bits 0-15: repeat count, bits 16-23: scan code
+        lparam = (1 << 0) | (scan << 16)
+        if not user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lparam):
+            logger.warning(f"PostMessage WM_KEYDOWN 失败: hwnd={hwnd}, vk={vk}")
 
     def _post_keyup(self, vk: int):
-        hwnd = win32gui.GetForegroundWindow()
-        lparam = (1 << 0) | (1 << 31) | (0x0E << 16)  # repeat=1, previous state=1, scancode=0x0E
-        user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam)
+        hwnd = self._keyboard_hwnd
+        scan = _vk_to_scancode(vk)
+        # bit 30: previous key state (was down), bit 31: transition (released)
+        lparam = (1 << 0) | (1 << 30) | (1 << 31) | (scan << 16)
+        if not user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam):
+            logger.warning(f"PostMessage WM_KEYUP 失败: hwnd={hwnd}, vk={vk}")
 
 
 # ============ 键码映射 ============
