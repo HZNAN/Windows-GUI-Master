@@ -135,14 +135,13 @@ class InputControl:
     def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
         """
         拖拽从 (x1, y1) 到 (x2, y2)
-
-        Args:
-            x1, y1: 起点坐标
-            x2, y2: 终点坐标
-            duration: 拖拽持续时间（秒）
         """
         if self.message_mode:
-            self._injector.drag(x1, y1, x2, y2, duration)
+            self._save_cursor()
+            win32api.SetCursorPos((x1, y1))
+            time.sleep(0.02)
+            pyautogui.drag(x2 - x1, y2 - y1, duration=duration, button="left")
+            self._restore_cursor()
         else:
             pyautogui.moveTo(x1, y1)
             self._sleep()
@@ -151,7 +150,10 @@ class InputControl:
 
     def mouse_down(self, x: int, y: int, button: str = "left"):
         if self.message_mode:
-            self._injector.mouse_down(x, y, button)
+            self._save_cursor()
+            win32api.SetCursorPos((x, y))
+            time.sleep(0.02)
+            pyautogui.mouseDown(button=button)
         elif self.virtual_mode:
             self._virtual_mouse_down(x, y, button)
         else:
@@ -160,7 +162,8 @@ class InputControl:
 
     def mouse_up(self, button: str = "left"):
         if self.message_mode:
-            self._injector.mouse_up(button)
+            pyautogui.mouseUp(button=button)
+            self._restore_cursor()
         elif self.virtual_mode:
             self._virtual_mouse_up(button)
         else:
