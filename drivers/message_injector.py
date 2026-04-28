@@ -31,11 +31,26 @@ MK_MBUTTON = 0x0010
 user32 = ctypes.windll.user32
 
 MAPVK_VK_TO_VSC = 0
+SMTO_NORMAL = 0x0000
+SENDMSG_TIMEOUT = 100  # ms
 
 
 def _vk_to_scancode(vk: int) -> int:
     """虚拟键码 → 硬件扫描码"""
     return user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
+
+
+def _send_message(hwnd: int, msg: int, wparam: int, lparam: int) -> bool:
+    """发送窗口消息：PostMessage 优先（非阻塞），失败则 SendMessageTimeoutW（同步回退）"""
+    if user32.PostMessageW(hwnd, msg, wparam, lparam):
+        return True
+    result = user32.SendMessageTimeoutW(
+        hwnd, msg, wparam, lparam, SMTO_NORMAL, SENDMSG_TIMEOUT, None
+    )
+    if result == 0:
+        err = ctypes.get_last_error()
+        logger.warning(f"消息注入失败: hwnd={hwnd}, msg=0x{msg:X}, err={err}")
+    return result != 0
 
 
 def _make_lparam(x: int, y: int) -> int:
@@ -92,8 +107,7 @@ class MessageInjector:
 
     @staticmethod
     def _post(hwnd, msg, wparam, lparam):
-        if not user32.PostMessageW(hwnd, msg, wparam, lparam):
-            logger.warning(f"PostMessage 失败: hwnd={hwnd}, msg=0x{msg:X}")
+        _send_message(hwnd, msg, wparam, lparam)
 
     def double_click(self, x: int, y: int, button: str = "left"):
         self.click(x, y, button)
@@ -223,18 +237,14 @@ class MessageInjector:
     def _post_keydown(self, vk: int):
         hwnd = self._keyboard_hwnd
         scan = _vk_to_scancode(vk)
-        # bits 0-15: repeat count, bits 16-23: scan code
         lparam = (1 << 0) | (scan << 16)
-        if not user32.PostMessageW(hwnd, WM_KEYDOWN, vk, lparam):
-            logger.warning(f"PostMessage WM_KEYDOWN 失败: hwnd={hwnd}, vk={vk}")
+        _send_message(hwnd, WM_KEYDOWN, vk, lparam)
 
     def _post_keyup(self, vk: int):
         hwnd = self._keyboard_hwnd
         scan = _vk_to_scancode(vk)
-        # bit 30: previous key state (was down), bit 31: transition (released)
         lparam = (1 << 0) | (1 << 30) | (1 << 31) | (scan << 16)
-        if not user32.PostMessageW(hwnd, WM_KEYUP, vk, lparam):
-            logger.warning(f"PostMessage WM_KEYUP 失败: hwnd={hwnd}, vk={vk}")
+        _send_message(hwnd, WM_KEYUP, vk, lparam)
 
 
 # ============ 键码映射 ============
