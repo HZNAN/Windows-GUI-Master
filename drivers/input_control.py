@@ -22,8 +22,12 @@ class InputControl:
     使用 pyautogui 实现鼠标键盘模拟
     """
 
-    def __init__(self, virtual_mode: bool = False):
+    def __init__(self, virtual_mode: bool = False, message_mode: bool = False):
         self.virtual_mode = virtual_mode
+        self.message_mode = message_mode
+        if message_mode:
+            from drivers.message_injector import MessageInjector
+            self._injector = MessageInjector()
 
     # ============ 鼠标操作 ============
 
@@ -35,7 +39,9 @@ class InputControl:
             x, y: 目标坐标
             button: 'left' / 'right' / 'middle'
         """
-        if self.virtual_mode:
+        if self.message_mode:
+            self._injector.click(x, y, button)
+        elif self.virtual_mode:
             self._virtual_click(x, y, button)
         else:
             self.move_to(x, y, duration=0.3)
@@ -76,7 +82,9 @@ class InputControl:
 
     def double_click(self, x: int, y: int, button: str = "left"):
         """双击"""
-        if self.virtual_mode:
+        if self.message_mode:
+            self._injector.double_click(x, y, button)
+        elif self.virtual_mode:
             self._virtual_click(x, y, button)
             time.sleep(0.1)
             self._virtual_click(x, y, button)
@@ -103,7 +111,9 @@ class InputControl:
             x, y: 滚动位置
             amount: 滚动量，正数向上滚动，负数向下滚动
         """
-        if self.virtual_mode:
+        if self.message_mode:
+            self._injector.scroll(x, y, amount)
+        elif self.virtual_mode:
             self._virtual_scroll(x, y, amount)
         else:
             pyautogui.moveTo(x, y)
@@ -128,9 +138,12 @@ class InputControl:
             x2, y2: 终点坐标
             duration: 拖拽持续时间（秒）
         """
-        pyautogui.moveTo(x1, y1)
-        self._sleep()
-        pyautogui.drag(x2 - x1, y2 - y1, duration=duration, button="left")
+        if self.message_mode:
+            self._injector.drag(x1, y1, x2, y2, duration)
+        else:
+            pyautogui.moveTo(x1, y1)
+            self._sleep()
+            pyautogui.drag(x2 - x1, y2 - y1, duration=duration, button="left")
         logger.debug(f"鼠标拖拽: ({x1},{y1}) -> ({x2},{y2})")
 
     # ============ 键盘操作 ============
