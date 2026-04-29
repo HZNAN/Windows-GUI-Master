@@ -266,7 +266,53 @@ move_to 调用
 
 ---
 
+## 11. Shell 弹出层覆盖光标 — Z 序竞争
+
+**问题：** 开始菜单、右键菜单、通知中心等 Shell 弹出层出现时，虚拟光标被完全遮盖。
+
+**尝试 1：`_force_topmost`（NOTOPMOST→TOPMOST 循环）**
+- 无效。Shell 弹出层（`Windows.UI.Core.CoreWindow`）使用 `Windows.UI.Composition` 渲染，Z 序在 DWM 中高于普通 `HWND_TOPMOST` 窗口。
+
+**尝试 2：全屏 TOPMOST 叠加窗口**  
+- 无效。虽然窗口覆盖全屏，但 Shell `CoreWindow` 仍然在 DWM 合成时排在 Win32 窗口上面。
+
+**尝试 3：后台线程每 100ms `_force_topmost`**
+- 无效。Shell 弹出层激活后 Z 序提升，`_force_topmost` 无法降到那些已经合成在更上层的 CoreWindow 下面再冒上来。
+
+**根因：** 旧方案使用 `SetLayeredWindowAttributes(LWA_COLORKEY)` → 走 GDI 兼容合成路径，DWM 将其排在 CoreWindow 后面。要竞争 Shell Z 序，必须走 **DWM DirectComposition 路径**。
+
+**最终方案：`UpdateLayeredWindow(ULW_ALPHA)` + 32-bit BGRA DIBSection**
+
+| 方面 | 旧方案 | 新方案 |
+|------|--------|--------|
+| 合成方式 | `SetLayeredWindowAttributes(LWA_COLORKEY)` | `UpdateLayeredWindow(ULW_ALPHA)` |
+| DWM 路径 | GDI 兼容路径（Z 序低） | DirectComposition 路径（Z 序可竞争） |
+| 透明度 | 色键（黑色=透明） | 逐像素 alpha（BGRA=0=透明） |
+| 绘图 | GDI `PatBlt` + `DrawIconEx` | `memset` 清零 + `DrawIconEx` 到内存 DC |
+| 刷新 | `InvalidateRect` → `WM_PAINT` → `BeginPaint` | 直接调用 `UpdateLayeredWindow` |
+
+```
+旧: PatBlt(黑) → DrawIconEx → InvalidateRect → WM_PAINT → DWM(GDI path) → 在 Shell 下层
+新: memset(0) → DrawIconEx → UpdateLayeredWindow → DWM(DirectComp) → 与 Shell 同级竞争
+```
+
+窗口依然是全屏 TOPMOST，但由于走 DWM DirectComposition 合成路径，能与 Shell 的 CoreWindow 同级 Z 序竞争。配合 `_force_topmost` + keeper 线程持续刷新 Z 序，光标被弹出层遮盖的时间缩短到毫秒级。
+
 ## 总结
+
+| # | 坑点 | 类别 | 根因一句话 |
+|---|------|------|-----------|
+| 1 | WndProc 回调失效 | Win32 API | 按实例注册窗口类 + 闭包捕获导致生命周期问题 |
+| 2 | HICON 不可见 | Win32 API | CreateIconIndirect 不兼容 32bpp alpha 位图 |
+| 3 | 黑块/图像叠加 | Win32 GDI | WM_ERASEBKGND 返回 1 跳过了背景清除 |
+| 4 | 指向方向错误 | 坐标变换 | 设计假设的图片朝向与实际图片不符 |
+| 5 | 旋转裁剪 | 图像处理/数学约束 | 24×24 对角 34px 恒 > 12px 半宽，任意画布 crop 回 24 必裁 5px；最终用 expand=True + 自然展开尺寸 |
+| 6 | 角度跳变 | 数值计算 | ±180° 边界处插值走了远路 |
+| 7 | 旋转瞬变 | 动画设计 | 全时长旋转"边转边走"不自然，改为 wind-up |
+| 8 | idle wobble 不晃动 | Win32 GDI | daemon 线程 UpdateWindow→BeginPaint 行为未定义 |
+| 9 | 弧线漂离操作位置 | 动画设计 | 纯前向步进累积漂移，需弹簧力约束 |
+| 10 | 动画架构迭代 | 整体设计 | 四次演进：lerp→全时长→wind-up→弹簧弧线 |
+| 11 | Shell 弹出层覆盖光标 | DWM Z 序 | LWA_COLORKEY 走 GDI 路径排 CoreWindow 后；改用 UpdateLayeredWindow(ULW_ALPHA) 走 DirectComp 竞争 |
 
 | # | 坑点 | 类别 | 根因一句话 |
 |---|------|------|-----------|
