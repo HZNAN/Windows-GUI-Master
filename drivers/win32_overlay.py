@@ -1,11 +1,10 @@
 """
-Windows 透明覆盖层 + 虚拟光标绘制
-使用 24x24 小窗口 + HICON 绘制虚拟光标
+Windows 全屏透明叠加层 + 虚拟光标绘制
+UpdateLayeredWindow(ULW_ALPHA) + 32-bit BGRA DIBSection，DWM DirectComposition 路径合成
 """
 import os
 import ctypes
 import tempfile
-import time
 import threading
 from typing import Optional
 
@@ -18,8 +17,8 @@ from loguru import logger
 
 class Win32Overlay:
     """
-    Windows 透明覆盖层
-    创建 24x24 小窗口绘制虚拟光标，不影响真实鼠标操作
+    Windows 全屏透明叠加层
+    UpdateLayeredWindow(ULW_ALPHA) + DWM DirectComposition 合成虚拟光标
     """
 
     _instance: Optional["Win32Overlay"] = None
@@ -38,8 +37,7 @@ class Win32Overlay:
         self._source_images: dict = {}     # cursor_type -> PIL Image (原始未旋转)
         self._angle_cache: dict[str, dict[int, int]] = {}  # cursor_type -> {snapped_angle: HICON}
         self._current_angle: float = -45.0
-        self._screen_w: int = 0
-        self._screen_h: int = 0
+        self._win_size = 48      # 窗口固定尺寸（够容纳旋转后最大 34px 光标）
         self._hdc_mem: int = 0   # 32-bit BGRA memory DC for UpdateLayeredWindow
         self._hbmp: int = 0      # DIB section handle
         self._pbits = None       # pointer to pixel data
@@ -401,28 +399,29 @@ class Win32Overlay:
                 self._paint_direct()
 
     def _paint_direct(self):
-        """逐像素 alpha 合成：画到 32-bit BGRA DIBSection → UpdateLayeredWindow。
-        走 DWM DirectComposition 路径，Z 序可竞争 Shell 弹出层。"""
+        """逐像素 alpha 合成到小窗口 DIBSection，用 UpdateLayeredWindow 动态定位到光标位置。
+        不创建全屏窗口——避免 Windows 全屏检测把任务栏降层。"""
         if not self._hdc_mem:
             return
 
         import ctypes as ct
         from ctypes import wintypes
 
-        # 全屏清零 = 完全透明 (BGRA = 0,0,0,0)
-        ct.memset(self._pbits, 0, self._screen_w * self._screen_h * 4)
+        sz = self._win_size
 
-        # 画光标到内存 DC
+        # 清零 = 完全透明
+        ct.memset(self._pbits, 0, sz * sz * 4)
+
+        # 光标居中绘制在窗口内
         if self.cursor_hicon and self._visible:
             icon_sz = getattr(self, '_current_icon_size', self._icon_size)
-            cx, cy = self._pos
+            offset = (sz - icon_sz) // 2
             win32gui.DrawIconEx(
-                self._hdc_mem,
-                cx - icon_sz // 2, cy - icon_sz // 2,
+                self._hdc_mem, offset, offset,
                 self.cursor_hicon,
                 icon_sz, icon_sz, 0, None, win32con.DI_NORMAL)
 
-        # UpdateLayeredWindow: per-pixel alpha 合成
+        # UpdateLayeredWindow: 动态指定窗口屏幕位置（pptDst）+ 大小（psize）
         class BLENDFUNCTION(ct.Structure):
             _fields_ = [
                 ("BlendOp", wintypes.BYTE),
@@ -431,30 +430,22 @@ class Win32Overlay:
                 ("AlphaFormat", wintypes.BYTE),
             ]
 
-        AC_SRC_OVER = 0x00
-        AC_SRC_ALPHA = 0x01
-        ULW_ALPHA = 0x00000002
-
         blend = BLENDFUNCTION()
-        blend.BlendOp = AC_SRC_OVER
+        blend.BlendOp = 0x00   # AC_SRC_OVER
         blend.BlendFlags = 0
         blend.SourceConstantAlpha = 255
-        blend.AlphaFormat = AC_SRC_ALPHA
+        blend.AlphaFormat = 0x01  # AC_SRC_ALPHA
 
-        ppt_dst = wintypes.POINT(self._screen_x, self._screen_y)
-        psize_dst = wintypes.SIZE(self._screen_w, self._screen_h)
+        cx, cy = self._pos
+        ppt_dst = wintypes.POINT(cx - sz // 2, cy - sz // 2)
+        psize_dst = wintypes.SIZE(sz, sz)
         ppt_src = wintypes.POINT(0, 0)
 
         ct.windll.user32.UpdateLayeredWindow(
-            self.hwnd,
-            0,  # hdcDst = NULL → screen
-            ct.byref(ppt_dst),
-            ct.byref(psize_dst),
-            self._hdc_mem,
-            ct.byref(ppt_src),
-            0,  # crKey (not used with ULW_ALPHA)
-            ct.byref(blend),
-            ULW_ALPHA
+            self.hwnd, 0,
+            ct.byref(ppt_dst), ct.byref(psize_dst),
+            self._hdc_mem, ct.byref(ppt_src),
+            0, ct.byref(blend), 0x00000002  # ULW_ALPHA
         )
 
     def _create_window_class(self) -> str:
@@ -494,17 +485,10 @@ class Win32Overlay:
         win32gui.EndPaint(self.hwnd, ps)
 
     def _ensure_window(self):
-        """创建全屏 UpdateLayeredWindow 叠加窗口。
-        使用逐像素 alpha (ULW_ALPHA)，走 DWM DirectComposition 路径，
-        Z 序可竞争 Shell 弹出层。"""
+        """创建小窗口（非全屏，避免触发 Windows 全屏检测把任务栏降层）。
+        使用 UpdateLayeredWindow 每帧动态指定窗口位置和大小。"""
         if self.hwnd != 0:
             return
-
-        # 获取虚拟屏幕尺寸（含多显示器）
-        self._screen_w = win32api.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
-        self._screen_h = win32api.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
-        self._screen_x = win32api.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
-        self._screen_y = win32api.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
 
         class_name = self._create_window_class()
 
@@ -514,39 +498,32 @@ class Win32Overlay:
             class_name,
             "VirtualCursor",
             win32con.WS_POPUP,
-            self._screen_x, self._screen_y, self._screen_w, self._screen_h,
+            0, 0, self._win_size, self._win_size,
             0, 0, 0, None
         )
 
         # 创建 32-bit BGRA DIBSection + 内存 DC（供 UpdateLayeredWindow 使用）
         self._create_dib_section()
 
-        # 预加载两种光标的源图和默认 HICON
         for cursor_type in ["arrow", "hand"]:
             img = self._create_cursor_image(cursor_type)
             self._source_images[cursor_type] = img
             hicon = self._create_hicon(img, cursor_type)
             if hicon:
                 self._hicons[cursor_type] = hicon
-                logger.info(f"Loaded cursor type '{cursor_type}': hicon={hicon}")
 
-        # 使用默认光标类型
         self.cursor_hicon = self._hicons.get(self._cursor_type)
         if not self.cursor_hicon and self._hicons:
             self.cursor_hicon = next(iter(self._hicons.values()))
 
-        # 初始隐藏
         win32gui.SetWindowPos(
             self.hwnd, win32con.HWND_TOPMOST,
-            0, 0, 0, 0,
-            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE |
+            -100, -100, self._win_size, self._win_size,
             win32con.SWP_NOACTIVATE | win32con.SWP_HIDEWINDOW
         )
 
-        logger.info(f"全屏叠加窗口 (UpdateLayeredWindow): {self._screen_w}x{self._screen_h}")
-
     def _create_dib_section(self):
-        """创建 32-bit BGRA DIBSection，供 per-pixel alpha 合成"""
+        """创建与窗口尺寸匹配的 32-bit BGRA DIBSection"""
         import ctypes as ct
         from ctypes import wintypes
 
@@ -565,13 +542,14 @@ class Win32Overlay:
                 ("biClrImportant", wintypes.DWORD),
             ]
 
+        sz = self._win_size
         bmi = BITMAPINFOHEADER()
         bmi.biSize = ct.sizeof(BITMAPINFOHEADER)
-        bmi.biWidth = self._screen_w
-        bmi.biHeight = -self._screen_h  # 负值 = top-down DIB
+        bmi.biWidth = sz
+        bmi.biHeight = -sz  # 负值 = top-down DIB
         bmi.biPlanes = 1
         bmi.biBitCount = 32
-        bmi.biCompression = 0  # BI_RGB
+        bmi.biCompression = 0
 
         hdc_screen = ct.windll.user32.GetDC(0)
         ppvBits = ct.c_void_p()
@@ -586,7 +564,6 @@ class Win32Overlay:
         self._pbits = ppvBits.value
         self._hdc_mem = ct.windll.gdi32.CreateCompatibleDC(0)
         ct.windll.gdi32.SelectObject(self._hdc_mem, self._hbmp)
-        logger.debug(f"DIBSection: {self._screen_w}x{self._screen_h}, hdc_mem={self._hdc_mem}")
 
     def set_cursor_type(self, cursor_type: str):
         """设置光标类型（arrow 或 hand）"""
@@ -608,51 +585,19 @@ class Win32Overlay:
         elif cursor_type in self._hicons:
             self.cursor_hicon = self._hicons[cursor_type]
 
-    def _force_topmost(self):
-        """强制将窗口推到 TOPMOST Z 序最顶层。
-        Shell 弹出层（开始菜单等）有特权 Z 序可覆盖普通 TOPMOST，
-        通过暂时退出再重新进入 TOPMOST 带强制刷新。"""
-        win32gui.SetWindowPos(self.hwnd, win32con.HWND_NOTOPMOST,
-            0, 0, 0, 0,
-            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-        win32gui.SetWindowPos(self.hwnd, win32con.HWND_TOPMOST,
-            0, 0, 0, 0,
-            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE)
-
-    def _start_topmost_keeper(self):
-        """后台线程：每 100ms 重新断言 TOPMOST 防止被激活的弹出层覆盖"""
-        if getattr(self, '_keep_topmost', False):
-            return
-        self._keep_topmost = True
-        def keeper():
-            while self._keep_topmost and self.hwnd:
-                try:
-                    self._force_topmost()
-                except Exception:
-                    pass
-                time.sleep(0.1)
-        t = threading.Thread(target=keeper, daemon=True)
-        t.start()
-
-    def _stop_topmost_keeper(self):
-        self._keep_topmost = False
-
     def show(self):
         self._ensure_window()
         if self.hwnd:
             win32gui.ShowWindow(self.hwnd, win32con.SW_SHOWNOACTIVATE)
-            self._force_topmost()
-            self._start_topmost_keeper()
             self._visible = True
 
     def hide(self):
-        self._stop_topmost_keeper()
         if self.hwnd:
             win32gui.ShowWindow(self.hwnd, win32con.SW_HIDE)
         self._visible = False
 
     def move_cursor(self, x: int, y: int, cursor_type: str = "arrow"):
-        """移动虚拟光标到指定屏幕坐标（全屏窗口上绘制，不移动窗口本身）"""
+        """移动虚拟光标到指定屏幕坐标。UpdateLayeredWindow 动态定位小窗口到光标位置。"""
         self._ensure_window()
         if not self.hwnd:
             return
@@ -665,11 +610,9 @@ class Win32Overlay:
         self._pos = (x, y)
         self._visible = True
 
-        # UpdateLayeredWindow 不依赖 WM_PAINT，直接绘制
         self._paint_direct()
 
     def close(self):
-        self._stop_topmost_keeper()
         # 释放 DIBSection + 内存 DC
         if self._hdc_mem:
             ctypes.windll.gdi32.DeleteDC(self._hdc_mem)

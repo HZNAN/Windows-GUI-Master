@@ -296,7 +296,7 @@ move_to 调用
 新: memset(0) → DrawIconEx → UpdateLayeredWindow → DWM(DirectComp) → 与 Shell 同级竞争
 ```
 
-窗口依然是全屏 TOPMOST，但由于走 DWM DirectComposition 合成路径，能与 Shell 的 CoreWindow 同级 Z 序竞争。配合 `_force_topmost` + keeper 线程持续刷新 Z 序，光标被弹出层遮盖的时间缩短到毫秒级。
+**注意：全屏 + TOPMOST 会触发 Windows 全屏应用检测，把任务栏降层。** 最终方案使用小窗口（48×48） + `UpdateLayeredWindow` 的 `pptDst`/`psize` 参数每帧动态定位窗口到光标位置——避免全屏检测，任务栏不受影响。
 
 ## 总结
 
@@ -312,7 +312,7 @@ move_to 调用
 | 8 | idle wobble 不晃动 | Win32 GDI | daemon 线程 UpdateWindow→BeginPaint 行为未定义 |
 | 9 | 弧线漂离操作位置 | 动画设计 | 纯前向步进累积漂移，需弹簧力约束 |
 | 10 | 动画架构迭代 | 整体设计 | 四次演进：lerp→全时长→wind-up→弹簧弧线 |
-| 11 | Shell 弹出层覆盖光标 | DWM Z 序 | LWA_COLORKEY 走 GDI 路径排 CoreWindow 后；改用 UpdateLayeredWindow(ULW_ALPHA) 走 DirectComp 竞争 |
+| 11 | Shell 弹出层覆盖光标 + 全屏降任务栏 | DWM Z 序 | LWA_COLORKEY→UpdateLayeredWindow(ULW_ALPHA)；全屏触发 Windows 全屏检测降任务栏，改小窗+动态 pptDst/psize |
 
 | # | 坑点 | 类别 | 根因一句话 |
 |---|------|------|-----------|
