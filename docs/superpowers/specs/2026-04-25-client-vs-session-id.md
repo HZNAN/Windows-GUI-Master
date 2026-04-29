@@ -64,7 +64,29 @@ Client connected: 9f34eab3        ← WebSocket 连接 3
 └─────────────────────────────────────────────────────────┘
 ```
 
-## 单一连接场景（acpx 实际行为）
+## Stdio 模式（acpx）
+
+Stdio 是单进程、单连接、同步请求-响应模型。不存在 `client_id`，`session_id` 即等价于连接标识。
+
+```
+acpx CLI ──(子进程 stdin/stdout)──► test_acp_stdio.py
+   │                                      │
+   │  initialize                          │
+   │  session/new ──► session_id = abc    │
+   │  prompt ──────────────────────────►  │
+   │  session/update ← (通知)             │
+   │  prompt response ← (stopReason)      │
+   │  prompt (人类回答) ───────────────►  │
+   │  ...                                 │
+```
+
+## 修复记录
+
+- **2026-04-29**: `ACPServer._cleanup_client` 修复 — 原来用 `req.msg.id`（JSON-RPC 消息 ID）比较 `client_id`，两者永远不等导致清理空操作。修复：`PendingRequest` 新增 `client_id` 字段，`send_confirm`/`send_request_param`/`send_ask_help` 填入当前客户端 ID。
+
+---
+
+## 单一连接场景（WebSocket）
 
 ```
 Client connected: abc123           ← 一个 WebSocket 连接
