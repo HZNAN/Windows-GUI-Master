@@ -25,6 +25,7 @@ class PendingRequest:
     event: asyncio.Event
     result: Optional[dict] = None
     timeout: float = 30.0
+    client_id: str = ""  # 所属客户端 ID，用于断连清理
 
 
 @dataclass
@@ -99,6 +100,7 @@ class ACPServer:
         self._current_session: Optional[ACPSessionState] = None
         self._server = None
         self._running = False
+        self._ws_client_ids: dict[int, str] = {}  # id(websocket) → client_id 映射
 
     async def start(self):
         """启动 WebSocket 服务"""
@@ -131,6 +133,7 @@ class ACPServer:
     async def _handle_client(self, ws: WebSocketServerProtocol, path: str):
         """处理客户端连接"""
         client_id = str(uuid.uuid4())[:8]
+        self._ws_client_ids[id(ws)] = client_id
         logger.info(f"Client connected: {client_id}")
 
         try:
@@ -354,7 +357,12 @@ class ACPServer:
 
             session_id = self._current_session.session_id if self._current_session else "default"
 
-            result = await self.handler.on_prompt(session_id, prompt_text, system_prompt)
+            # 暂存 ws 引用，供 handler 的 _poll_agent_until_done_or_needs_help 发送通知
+            self.handler._ws = ws
+            try:
+                result = await self.handler.on_prompt(session_id, prompt_text, system_prompt)
+            finally:
+                self.handler._ws = None
 
             response = ACPProtocol.build_prompt_response(
                 msg_id=msg.id,
@@ -371,13 +379,24 @@ class ACPServer:
             await ws.send(ACPProtocol.encode(error))
 
     def _cleanup_client(self, client_id: str):
-        """清理客户端相关的待处理请求"""
+        """清理客户端相关的待处理请求和映射"""
         expired = [
             rid for rid, req in self._pending_requests.items()
-            if req.msg.id == client_id
+            if req.client_id == client_id
         ]
         for rid in expired:
             self._pending_requests.pop(rid, None)
+        if expired:
+            logger.info(f"Cleaned up {len(expired)} pending requests for client {client_id}")
+
+        # 清理 websocket → client_id 映射
+        stale = [ws_id for ws_id, cid in self._ws_client_ids.items() if cid == client_id]
+        for ws_id in stale:
+            del self._ws_client_ids[ws_id]
+
+    def _get_client_id(self, websocket) -> str:
+        """从 websocket 查找对应的 client_id"""
+        return self._ws_client_ids.get(id(websocket), "unknown")
 
     async def send_confirm(
         self,
@@ -397,7 +416,12 @@ class ACPServer:
             timeout=int(timeout),
         )
 
-        pending = PendingRequest(msg=msg, event=asyncio.Event(), timeout=timeout)
+        pending = PendingRequest(
+            msg=msg,
+            event=asyncio.Event(),
+            timeout=timeout,
+            client_id=self._get_client_id(websocket),
+        )
         self._pending_requests[msg_id] = pending
 
         await websocket.send(ACPProtocol.encode(msg))
@@ -425,7 +449,12 @@ class ACPServer:
             current_state=current_state,
         )
 
-        pending = PendingRequest(msg=msg, event=asyncio.Event(), timeout=timeout)
+        pending = PendingRequest(
+            msg=msg,
+            event=asyncio.Event(),
+            timeout=timeout,
+            client_id=self._get_client_id(websocket),
+        )
         self._pending_requests[msg_id] = pending
 
         await websocket.send(ACPProtocol.encode(msg))
@@ -455,7 +484,12 @@ class ACPServer:
             suggestions=suggestions,
         )
 
-        pending = PendingRequest(msg=msg, event=asyncio.Event(), timeout=timeout)
+        pending = PendingRequest(
+            msg=msg,
+            event=asyncio.Event(),
+            timeout=timeout,
+            client_id=self._get_client_id(websocket),
+        )
         self._pending_requests[msg_id] = pending
 
         await websocket.send(ACPProtocol.encode(msg))

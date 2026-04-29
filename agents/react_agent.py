@@ -12,7 +12,7 @@ from langchain_openai import ChatOpenAI
 from tools.screen import screenshot
 from tools.mouse import click, move_mouse, double_click, right_click, scroll, drag
 from tools.keyboard import type_text, press_key, hotkey, key_down, key_up, wait
-from tools.agent import finish, continue_steps, retry
+from tools.agent import finish, continue_steps, retry, ask_human
 
 # 状态工具名称
 STATE_TOOLS = {"finish", "continue_steps", "retry"}
@@ -67,6 +67,7 @@ class ReactAgentLoop:
             [
                 click, move_mouse, double_click, right_click, scroll, drag,
                 type_text, press_key, hotkey, key_down, key_up, wait,
+                ask_human,
                 finish, continue_steps, retry
             ],
             tool_choice="auto"
@@ -172,6 +173,10 @@ class ReactAgentLoop:
                 reason = args.get('reason', '')
                 retry.func(reason=reason)
                 return f"[retry] reason='{reason}' | Result: RETRY"
+            elif tool_name == "ask_human":
+                result = ask_human.func(**args)
+                question = args.get('question', '')
+                return f"[ask_human] question='{question}' | Human response: {result}"
             else:
                 return f"[unknown] | Result: Unknown tool: {tool_name}"
         except Exception as e:
@@ -356,6 +361,11 @@ class ReactAgentLoop:
                 content = response.content if hasattr(response, 'content') and response.content else ""
                 logger.info(f"[OUTPUT] LLM content: {content[:300] if content else '(empty)'}")
 
+                # 通知主线程：LLM 文本输出
+                if content:
+                    from core.agent_service import push_notification
+                    push_notification("agent_message_chunk", content)
+
                 if not hasattr(response, 'tool_calls') or not response.tool_calls:
                     logger.info(f"[OUTPUT] Tool calls: (none)")
                     result = ReactResult(
@@ -377,9 +387,28 @@ class ReactAgentLoop:
                     tool_name = self._clean_tool_name(tc.get("name", ""))
                     tool_args = self._clean_tool_args(tc.get("args", {}))
 
+                    # 通知主线程：工具调用 (非状态工具)
+                    tc_id = ""
+                    if tool_name not in STATE_TOOLS:
+                        from core.agent_service import push_notification
+                        import uuid as _uuid
+                        tc_id = str(_uuid.uuid4())[:8]
+                        push_notification("tool_call", str(tool_args),
+                                          toolCallId=tc_id, title=tool_name,
+                                          status="in_progress",
+                                          rawInput={"text": str(tool_args)})
+
                     logger.info(f"  -> 执行: {tool_name}({tool_args})")
                     result = self._execute_tool(tool_name, tool_args)
                     logger.info(f"  <- 结果: {result}")
+
+                    # 通知主线程：工具完成 (acpx 用 tool_call_update 表示工具结束)
+                    if tool_name not in STATE_TOOLS:
+                        push_notification("tool_call_update", result,
+                                          toolCallId=tc_id, title=tool_name,
+                                          status="completed",
+                                          rawInput={"text": str(tool_args)},
+                                          rawOutput={"text": result})
 
                     if tool_name == "finish":
                         finish_result = ReactResult(

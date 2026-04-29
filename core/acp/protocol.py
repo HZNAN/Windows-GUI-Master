@@ -336,17 +336,34 @@ class ACPProtocol:
         cls,
         session_id: str,
         update_type: str,
-        content: Any,
+        content: str,
+        extra: Optional[dict] = None,
     ) -> ACPMessage:
-        """构建 sessionUpdate 通知 (Server -> Client, 无需响应)"""
+        """构建 session/update 通知 (acpx 兼容格式)
+
+        acpx 格式参考:
+          agent_message_chunk: { sessionUpdate, content: {type, text} }
+          tool_call: { sessionUpdate, toolCallId, title, status, kind, rawInput }
+          tool_call_update: { sessionUpdate, toolCallId, title, status, rawInput, rawOutput }
+        """
+        update: dict = {"sessionUpdate": update_type}
+
+        if update_type == "agent_message_chunk":
+            update["content"] = {"type": "text", "text": content}
+        elif update_type in ("tool_call", "tool_call_update"):
+            # tool 类型不应有顶层 content/kind，由 extra (rawInput/rawOutput) 提供数据
+            pass
+        else:
+            update["content"] = {"type": "text", "text": content}
+
+        if extra:
+            update.update(extra)
+
         return ACPMessage(
             jsonrpc=ACPProtocol.VERSION,
             method=ACPMethod.SESSION_UPDATE.value,
             params={
                 "sessionId": session_id,
-                "update": {
-                    "type": update_type,
-                    "content": content,
-                },
+                "update": update,
             },
         )

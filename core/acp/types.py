@@ -14,7 +14,7 @@ class ACPMethod(str, Enum):
     NEW_SESSION = "newSession"
     LOAD_SESSION = "loadSession"
     PROMPT = "prompt"
-    SESSION_UPDATE = "sessionUpdate"
+    SESSION_UPDATE = "session/update"
 
     # ===== Extended Methods (我们的扩展) =====
     # Server -> Client
