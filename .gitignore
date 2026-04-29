@@ -23,6 +23,22 @@ env/
 .sample_images/
 reports/
 logs/
+outputs/
+
+# ACP runtime
+.acpx_logs/
+.acpxrc.json
+
+# Superpowers
+.superpowers/
+.claude/
+
+# Temp/scratch
+12.0
+*.png
+debug_stdin.py
+minimal_stdio.py
+resume_cua.md
 
 # OS
 Thumbs.db
