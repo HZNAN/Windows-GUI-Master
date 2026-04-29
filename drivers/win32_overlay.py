@@ -32,7 +32,9 @@ class Win32Overlay:
         self._cursor_png_path: Optional[str] = None
         self._cursor_type: str = "arrow"
         self._hicons: dict = {}  # 缓存不同类型的 HICON
-        self._size = 24
+        self._size = 48          # 窗口尺寸（需足够大容纳旋转后的光标）
+        self._icon_size = 24     # 光标图标默认尺寸
+        self._current_icon_size = 24  # 当前帧的实际图标尺寸（旋转后会变大）
         self._source_images: dict = {}     # cursor_type -> PIL Image (原始未旋转)
         self._angle_cache: dict[str, dict[int, int]] = {}  # cursor_type -> {snapped_angle: HICON}
         self._current_angle: float = -45.0
@@ -311,12 +313,13 @@ class Win32Overlay:
 
         return 0
 
-    def _create_hicon_from_image(self, img: Image.Image) -> int:
+    def _create_hicon_from_image(self, img: Image.Image, size: int = None) -> int:
         """从 PIL Image 通过 PNG→ICO 文件 + LoadImage 创建 HICON"""
         import io
         import struct
 
-        size = self._size
+        if size is None:
+            size = self._icon_size
 
         # 将 PIL Image 保存为 PNG 字节流
         png_buf = io.BytesIO()
@@ -339,7 +342,7 @@ class Win32Overlay:
             hicon = win32gui.LoadImage(
                 0, ico_path, win32con.IMAGE_ICON,
                 size, size,
-                win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+                win32con.LR_LOADFROMFILE
             )
         finally:
             try:
@@ -350,50 +353,45 @@ class Win32Overlay:
         return hicon if hicon else 0
 
     def _build_angle_cache(self, cursor_type: str):
-        """为一个光标类型预生成 120 个旋转 HICON（每 3° 一个）"""
+        """为一个光标类型预生成旋转 HICON（每 3° 一个，expand=True 保留完整边界）"""
         logger.info(f"Building angle cache for '{cursor_type}' (120 HICONs)...")
         if cursor_type not in self._source_images:
             img = self._create_cursor_image(cursor_type)
             self._source_images[cursor_type] = img
         source = self._source_images[cursor_type]
 
-        size = self._size
-        canvas_size = 72  # 大画布确保旋转后不裁剪
-
-        # 将源图居中放置在大画布上
-        padded = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
-        offset = (canvas_size - size) // 2
-        padded.paste(source, (offset, offset))
-
-        cache: dict[int, int] = {}
+        cache: dict[int, tuple[int, int]] = {}  # deg -> (hicon, actual_size)
         for deg in range(0, 360, 3):
-            # 源图自然朝向左上，PIL rotate CCW；角度约定 0=右 90=下 180=左 270=上
-            # 要显示在 deg 方向：PIL 旋转 = 225 - deg
-            rotated = padded.rotate(225 - deg, resample=Image.BICUBIC, expand=False)
-            # 中心裁剪回 24x24
-            crop_offset = (canvas_size - size) // 2
-            cropped = rotated.crop((crop_offset, crop_offset, crop_offset + size, crop_offset + size))
-            hicon = self._create_hicon_from_image(cropped)
+            rotated = source.rotate(225 - deg, resample=Image.BICUBIC, expand=True)
+            rw, rh = rotated.size
+            use_size = max(rw, rh)
+            # ICO 要求方形，非方形需 padding
+            if rw != rh:
+                square = Image.new("RGBA", (use_size, use_size), (0, 0, 0, 0))
+                square.paste(rotated, ((use_size - rw) // 2, (use_size - rh) // 2))
+                rotated = square
+            hicon = self._create_hicon_from_image(rotated, size=use_size)
             if hicon:
-                cache[deg] = hicon
+                cache[deg] = (hicon, use_size)
         self._angle_cache[cursor_type] = cache
         logger.info(f"Angle cache for '{cursor_type}' built: {len(cache)} HICONs cached")
 
-    def _get_cached_hicon(self, cursor_type: str, angle: float) -> int:
-        """获取最接近角度的缓存 HICON，必要时懒构建缓存"""
+    def _get_cached_hicon(self, cursor_type: str, angle: float) -> tuple[int, int]:
+        """获取最接近角度的缓存 HICON + 实际尺寸，必要时懒构建缓存"""
         if cursor_type not in self._angle_cache:
             self._build_angle_cache(cursor_type)
         cache = self._angle_cache[cursor_type]
         snapped = round(angle / 3) * 3
         snapped = snapped % 360
-        return cache.get(snapped, 0)
+        return cache.get(snapped, (0, self._icon_size))
 
     def set_angle(self, angle: float):
         """设置光标显示角度并重绘（GetDC 直接绘制，跨线程安全）"""
         self._current_angle = angle
-        hicon = self._get_cached_hicon(self._cursor_type, angle)
+        hicon, icon_size = self._get_cached_hicon(self._cursor_type, angle)
         if hicon:
             self.cursor_hicon = hicon
+            self._current_icon_size = icon_size
             if self.hwnd:
                 self._paint_direct()
 
@@ -403,8 +401,10 @@ class Win32Overlay:
         try:
             win32gui.PatBlt(dc, 0, 0, self._size, self._size, win32con.BLACKNESS)
             if self.cursor_hicon:
-                win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon,
-                    self._size, self._size, 0, None, win32con.DI_NORMAL)
+                icon_sz = getattr(self, '_current_icon_size', self._icon_size)
+                offset = (self._size - icon_sz) // 2
+                win32gui.DrawIconEx(dc, offset, offset, self.cursor_hicon,
+                    icon_sz, icon_sz, 0, None, win32con.DI_NORMAL)
         finally:
             win32gui.ReleaseDC(self.hwnd, dc)
 
@@ -448,9 +448,13 @@ class Win32Overlay:
         # 填充黑色背景（LWA_COLORKEY 使黑色透明），清除上一帧残留
         win32gui.PatBlt(dc, 0, 0, self._size, self._size, win32con.BLACKNESS)
 
+        icon_sz = getattr(self, '_current_icon_size', self._icon_size)
+        offset = (self._size - icon_sz) // 2
+
         # 使用当前光标类型的 HICON
         if self.cursor_hicon:
-            win32gui.DrawIconEx(dc, 0, 0, self.cursor_hicon, 24, 24, 0, None, win32con.DI_NORMAL)
+            win32gui.DrawIconEx(dc, offset, offset, self.cursor_hicon,
+                icon_sz, icon_sz, 0, None, win32con.DI_NORMAL)
         else:
             # 备用：加载对应的 ICO 文件
             ico_path = os.path.join(tempfile.gettempdir(), f"virtual_cursor_{self._cursor_type}.ico")
@@ -460,11 +464,12 @@ class Win32Overlay:
                         0,
                         ico_path,
                         win32con.IMAGE_ICON,
-                        24, 24,
-                        win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE
+                        icon_sz, icon_sz,
+                        win32con.LR_LOADFROMFILE
                     )
                     if hicon:
-                        win32gui.DrawIconEx(dc, 0, 0, hicon, 24, 24, 0, None, win32con.DI_NORMAL)
+                        win32gui.DrawIconEx(dc, offset, offset, hicon,
+                            icon_sz, icon_sz, 0, None, win32con.DI_NORMAL)
                         win32gui.DestroyIcon(hicon)
                 except Exception as e:
                     logger.warning(f"LoadImage ICO failed: {e}")

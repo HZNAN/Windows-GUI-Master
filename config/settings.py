@@ -26,6 +26,7 @@ STEP_TIMEOUT = int(os.getenv("STEP_TIMEOUT", "30"))
 # ============ ReactAgent 配置 ============
 AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))
 AGENT_HISTORY_WINDOW = int(os.getenv("AGENT_HISTORY_WINDOW", "3"))
+AGENT_TURN_DELAY = float(os.getenv("AGENT_TURN_DELAY", "0.3"))  # 每轮操作完成后到下一轮截图的等待（秒），给 UI 时间渲染
 
 # ============ LLM 模型配置 ============
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))

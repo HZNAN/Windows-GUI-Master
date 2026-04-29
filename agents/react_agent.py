@@ -1,6 +1,7 @@
 """
 LangChain ReAct 代理 - 使用标准 LangChain Agent 模式
 """
+import time as _time
 from dataclasses import dataclass
 from pathlib import Path
 from loguru import logger
@@ -285,8 +286,8 @@ class ReactAgentLoop:
     def run(self) -> ReactResult:
         """
         多工具调用模式：
-        - 模型一次可调用多个工具
-        - 每个工具执行后自动截图
+        - 每轮开始时截图一次（唯一一次），作为 LLM 视觉输入
+        - 模型一次可调用多个工具，中间不再截图
         - 最后一个工具必须是 finish/continue_steps/retry
 
         Previous result 格式：
@@ -305,13 +306,16 @@ class ReactAgentLoop:
             # 每个元素代表一轮操作，status 对该轮所有 outputs 统一生效
             history_turns = []
 
-            screenshot_data = screenshot.func()
-            screenshot_url = screenshot_data["image"]
-
             step_count = 0
 
             while step_count < self.max_steps:
                 step_count += 1
+
+                from config.settings import AGENT_TURN_DELAY
+                _time.sleep(AGENT_TURN_DELAY)
+
+                screenshot_data = screenshot.func()
+                screenshot_url = screenshot_data["image"]
 
                 prev_result_text = self._build_prev_result(history_turns)
 
@@ -347,8 +351,6 @@ class ReactAgentLoop:
                     response = self.llm.invoke(messages, config={"timeout": 60})
                 except Exception as e:
                     logger.error(f"LLM 调用失败: {e}")
-                    screenshot_data = screenshot.func()
-                    screenshot_url = screenshot_data["image"]
                     continue
 
                 content = response.content if hasattr(response, 'content') and response.content else ""
@@ -378,9 +380,6 @@ class ReactAgentLoop:
                     logger.info(f"  -> 执行: {tool_name}({tool_args})")
                     result = self._execute_tool(tool_name, tool_args)
                     logger.info(f"  <- 结果: {result}")
-
-                    screenshot_data = screenshot.func()
-                    screenshot_url = screenshot_data["image"]
 
                     if tool_name == "finish":
                         finish_result = ReactResult(
@@ -419,8 +418,6 @@ class ReactAgentLoop:
                         history_turns, current_turn_operations,
                         "(auto) 模型未给出状态判断", "continue"
                     )
-                    screenshot_data = screenshot.func()
-                    screenshot_url = screenshot_data["image"]
                     continue
 
             result = ReactResult(

@@ -1,6 +1,10 @@
 """
-消息注入驱动
-通过 PostMessage 直接将鼠标/键盘消息投递到目标窗口，完全绕过系统光标
+消息注入驱动（混合模式）
+
+瞬态操作（click/scroll/type/hotkey）：纯 PostMessage/SendMessage 注入，零光标操作。
+长时操作（drag/mouse_down/mouse_up）：隐藏真实光标→操作→恢复原位→显示光标。
+纯消息无法实现长时操作的原因：Windows 拖拽状态机依赖 GetAsyncKeyState + GetCapture + GetMessagePos，
+这些系统级状态只能通过真实输入管道（mouse_event/SendInput）更新。
 """
 import ctypes
 import time
@@ -12,8 +16,12 @@ import win32gui
 
 
 # Win32 常量
+OCR_NORMAL = 32512  # 标准箭头光标 ID
+IMAGE_CURSOR = 2
+
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
+WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONDOWN = 0x0204
 WM_RBUTTONUP = 0x0205
 WM_MBUTTONDOWN = 0x0207
@@ -52,6 +60,8 @@ user32.SendMessageW.argtypes = [
 user32.SendMessageW.restype = ctypes.c_longlong
 user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
 user32.MapVirtualKeyW.restype = ctypes.c_uint
+user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ctypes.c_ulonglong]
+user32.keybd_event.restype = None
 
 MAPVK_VK_TO_VSC = 0
 SMTO_NORMAL = 0x0000
@@ -106,6 +116,40 @@ class MessageInjector:
             return None, 0, 0
         return hwnd, cx, cy
 
+    @staticmethod
+    def _create_invisible_cursor():
+        """创建完全透明的 32×32 单色光标。
+        AND mask 全 1（屏幕像素原样通过），XOR mask 全 0（不反转）。
+        结果：光标在任何背景下都不可见。"""
+        and_mask = (ctypes.c_ubyte * 128)(*([0xFF] * 128))
+        xor_mask = (ctypes.c_ubyte * 128)(*([0x00] * 128))
+        return ctypes.windll.user32.CreateCursor(0, 0, 0, 32, 32, and_mask, xor_mask)
+
+    def _hide_real_cursor(self):
+        """替换系统箭头光标为透明光标，使真实光标彻底不可见"""
+        h_arrow = ctypes.windll.user32.LoadCursorW(0, OCR_NORMAL)
+        if h_arrow:
+            self._backup_arrow = ctypes.windll.user32.CopyImage(
+                h_arrow, IMAGE_CURSOR, 0, 0, 0x00004000  # LR_COPYFROMRESOURCE
+            )
+        if not getattr(self, '_backup_arrow', 0):
+            logger.warning("无法备份系统箭头光标，光标隐藏可能失效")
+            return
+
+        h_invis = self._create_invisible_cursor()
+        if h_invis:
+            if not ctypes.windll.user32.SetSystemCursor(h_invis, OCR_NORMAL):
+                logger.warning(f"SetSystemCursor 失败: {ctypes.get_last_error()}")
+            else:
+                logger.debug("系统光标已替换为透明光标")
+
+    def _show_real_cursor(self):
+        """恢复系统箭头光标（替换回备份的正常光标）"""
+        if getattr(self, '_backup_arrow', 0):
+            ctypes.windll.user32.SetSystemCursor(self._backup_arrow, OCR_NORMAL)
+            self._backup_arrow = 0
+            logger.debug("系统箭头光标已恢复")
+
     def click(self, x: int, y: int, button: str = "left"):
         hwnd, cx, cy = self._require_window(x, y)
         if hwnd is None:
@@ -133,121 +177,175 @@ class MessageInjector:
         _send_message(hwnd, msg, wparam, lparam)
 
     def double_click(self, x: int, y: int, button: str = "left"):
-        self.click(x, y, button)
-        time.sleep(0.1)
-        self.click(x, y, button)
-        logger.debug(f"注入双击: ({x},{y}), btn={button}")
-
-    def scroll(self, x: int, y: int, amount: int = 3):
-        hwnd, cx, cy = self._require_window(x, y)
-        if hwnd is None:
-            return
-        lparam = _make_lparam(cx, cy)
-        wparam = _make_wparam(0, amount * WHEEL_DELTA)
-        self._post(hwnd, WM_MOUSEWHEEL, wparam, lparam)
-        logger.debug(f"注入滚动: ({x},{y}), amount={amount}")
-
-    def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
-        """
-        拖拽：Edit/RichEdit 控件用 EM_CHARFROMPOS + EM_SETSEL 精确选文，
-        完全不动真实光标。非 Edit 控件当前不支持纯消息拖拽。
-        """
-        hwnd, cx1, cy1 = self._require_window(x1, y1)
-        if hwnd is None:
-            return
-        _, cx2, cy2 = self._find_window_and_pos(x2, y2)
-
-        class_name = win32gui.GetClassName(hwnd)
-        logger.info(f"drag 目标窗口: hwnd={hwnd}, class={class_name}")
-        if class_name == "Edit" or class_name.startswith("RichEdit"):
-            self._drag_edit(hwnd, cx1, cy1, cx2, cy2, duration)
-        else:
-            logger.warning(
-                f"纯消息拖拽不支持此类窗口: {class_name}。"
-                f"Edit/RichEdit 控件可用 EM_SETSEL，其他窗口需要真实输入。"
-            )
-
-    def _drag_edit(self, hwnd, cx1, cy1, cx2, cy2, duration):
-        """用 EM_CHARFROMPOS + EM_SETSEL 在 Edit 控件中选文（零光标移动）
-        EM_CHARFROMPOS 返回 DWORD: LOWORD=字符索引, HIWORD=行号"""
-        lparam1 = _make_lparam(cx1, cy1)
-        result1 = user32.SendMessageW(hwnd, EM_CHARFROMPOS, 0, lparam1)
-        dword1 = result1 & 0xFFFFFFFF
-        start_char = dword1 & 0xFFFF  # LOWORD = 字符索引
-
-        lparam2 = _make_lparam(cx2, cy2)
-        result2 = user32.SendMessageW(hwnd, EM_CHARFROMPOS, 0, lparam2)
-        dword2 = result2 & 0xFFFFFFFF
-        end_char = dword2 & 0xFFFF
-
-        logger.debug(
-            f"EM_CHARFROMPOS: ({cx1},{cy1}) -> char={start_char} (dword={dword1:#x}), "
-            f"({cx2},{cy2}) -> char={end_char} (dword={dword2:#x})"
-        )
-
-        # 动画：逐字符移动选区
-        step_char = 1 if end_char >= start_char else -1
-        char_count = abs(end_char - start_char)
-        if char_count < 1:
-            char_count = 1
-        max_frames = min(char_count, 60)
-        frame_delay = duration / max_frames
-        chars_per_frame = max(1, char_count // max_frames)
-
-        for i in range(max_frames + 1):
-            pos = start_char + step_char * min(i * chars_per_frame, char_count)
-            user32.SendMessageW(hwnd, EM_SETSEL, start_char, pos)
-            if frame_delay > 0:
-                time.sleep(frame_delay)
-
-        # 精确收束
-        user32.SendMessageW(hwnd, EM_SETSEL, start_char, end_char)
-        logger.debug(f"EM_SETSEL: char {start_char} -> {end_char}")
-
-    def mouse_down(self, x: int, y: int, button: str = "left"):
-        """
-        纯消息 mouse_down：Edit 控件等同设置光标位置。
-        非 Edit 控件不支持纯消息"按住"操作（需系统输入管道）。
-        """
+        """双击：第一次 click，第二次用 WM_LBUTTONDBLCLK 触发双击行为"""
         hwnd, cx, cy = self._require_window(x, y)
         if hwnd is None:
             return
         self._last_click_hwnd = hwnd
+        lparam = _make_lparam(cx, cy)
+
+        # 第一击：正常 click
+        self._post(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
+        time.sleep(0.02)
+        self._post(hwnd, WM_LBUTTONUP, 0, lparam)
+        time.sleep(0.05)
+
+        # 第二击：WM_LBUTTONDBLCLK 替换 WM_LBUTTONDOWN
+        self._post(hwnd, WM_LBUTTONDBLCLK, MK_LBUTTON, lparam)
+        time.sleep(0.02)
+        self._post(hwnd, WM_LBUTTONUP, 0, lparam)
+
+        logger.debug(f"注入双击: ({x},{y}), btn={button}")
+
+    def scroll(self, x: int, y: int, amount: int = 3):
+        """滚动：Edit/浏览器用 WM_MOUSEWHEEL 纯消息，其他应用用 mouse_event 移动+滚轮。"""
+        hwnd, cx, cy = self._require_window(x, y)
+        if hwnd is None:
+            return
 
         class_name = win32gui.GetClassName(hwnd)
-        if class_name == "Edit" or class_name.startswith("RichEdit"):
-            msg_down = {"left": WM_LBUTTONDOWN, "right": WM_RBUTTONDOWN,
-                         "middle": WM_MBUTTONDOWN}.get(button, WM_LBUTTONDOWN)
-            mk = {"left": MK_LBUTTON, "right": MK_RBUTTON,
-                  "middle": MK_MBUTTON}.get(button, MK_LBUTTON)
-            _send_message(hwnd, msg_down, mk, _make_lparam(cx, cy))
-            logger.debug(f"注入按下 (Edit): ({x},{y}), btn={button}")
+        if class_name in ("Edit",) or class_name.startswith("RichEdit") or \
+                "Chrome" in class_name or "RenderWidget" in class_name:
+            lparam = _make_lparam(cx, cy)
+            wparam = _make_wparam(0, amount * WHEEL_DELTA)
+            self._post(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+            logger.debug(f"scroll WM_MOUSEWHEEL: amount={amount}, class={class_name}")
         else:
-            logger.warning(
-                f"纯消息 mouse_down 不支持此类窗口: {class_name}。"
-                f"Edit 控件可用，其他窗口需要真实输入。"
-            )
+            saved = win32api.GetCursorPos()
+            self._hide_real_cursor()
+            try:
+                # 用 mouse_event(MOVE|ABSOLUTE) 设定逻辑光标位置
+                screen_w = win32api.GetSystemMetrics(0)
+                screen_h = win32api.GetSystemMetrics(1)
+                abs_x = int(x * 65535 / screen_w)
+                abs_y = int(y * 65535 / screen_h)
+                win32api.mouse_event(
+                    win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE,
+                    abs_x, abs_y, 0, 0)
+                time.sleep(0.01)
+                win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0,
+                                     amount * WHEEL_DELTA, 0)
+                time.sleep(0.02)
+                logger.debug(f"scroll mouse_event: amount={amount}, class={class_name}")
+            finally:
+                win32api.SetCursorPos(saved)
+                self._show_real_cursor()
+
+    def drag(self, x1: int, y1: int, x2: int, y2: int, duration: float = 0.5):
+        """
+        拖拽：透明光标 → 移动到起点 → 按下 → 动画移到终点 → 释放 → 恢复原位 → 正常光标。
+        纯消息无法实现拖拽（需要系统按钮状态 + capture），使用透明光标方式工作。
+        """
+        saved = win32api.GetCursorPos()
+        self._hide_real_cursor()
+        try:
+            win32api.SetCursorPos((x1, y1))
+            time.sleep(0.02)
+
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+            time.sleep(0.02)
+
+            steps = max(int(duration / 0.016), 10)
+            for i in range(1, steps + 1):
+                t = i / steps
+                cur_x = int(x1 + (x2 - x1) * t)
+                cur_y = int(y1 + (y2 - y1) * t)
+                win32api.SetCursorPos((cur_x, cur_y))
+                time.sleep(duration / steps)
+
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.02)
+
+            logger.debug(f"drag: ({x1},{y1}) -> ({x2},{y2}), duration={duration}s")
+        finally:
+            win32api.SetCursorPos(saved)
+            self._show_real_cursor()
+
+    def mouse_down(self, x: int, y: int, button: str = "left"):
+        """
+        按住鼠标按键：透明光标 → 移动到目标 → mouse_event down。
+        纯消息无法实现按住操作（需系统按钮状态），使用透明光标方式工作。
+        """
+        self._saved_cursor = win32api.GetCursorPos()
+        self._hide_real_cursor()
+        try:
+            win32api.SetCursorPos((x, y))
+            time.sleep(0.01)
+
+            btn_flag = {
+                "left": win32con.MOUSEEVENTF_LEFTDOWN,
+                "right": win32con.MOUSEEVENTF_RIGHTDOWN,
+                "middle": win32con.MOUSEEVENTF_MIDDLEDOWN,
+            }.get(button, win32con.MOUSEEVENTF_LEFTDOWN)
+            win32api.mouse_event(btn_flag, 0, 0, 0, 0)
+            logger.debug(f"mouse_down: ({x},{y}), btn={button}")
+        except Exception:
+            self._show_real_cursor()
+            raise
 
     def mouse_up(self, button: str = "left"):
         """
-        纯消息 mouse_up：发送 WM_LBUTTONUP 到目标窗口。
+        释放鼠标按键：mouse_event up → 恢复光标位置 → 正常光标。
         """
-        hwnd = self._last_click_hwnd or win32gui.GetForegroundWindow()
-        if hwnd is None:
+        try:
+            btn_flag = {
+                "left": win32con.MOUSEEVENTF_LEFTUP,
+                "right": win32con.MOUSEEVENTF_RIGHTUP,
+                "middle": win32con.MOUSEEVENTF_MIDDLEUP,
+            }.get(button, win32con.MOUSEEVENTF_LEFTUP)
+            win32api.mouse_event(btn_flag, 0, 0, 0, 0)
+            time.sleep(0.01)
+            logger.debug(f"mouse_up: btn={button}")
+        finally:
+            if hasattr(self, '_saved_cursor'):
+                win32api.SetCursorPos(self._saved_cursor)
+            self._show_real_cursor()
+
+    def _focus_window(self, hwnd: int):
+        """将键盘焦点强制设到目标窗口。
+        PostMessage 点击不会自动转移焦点，需要 AttachThreadInput + SetFocus。"""
+        if not hwnd:
             return
-        msg_up = {"left": WM_LBUTTONUP, "right": WM_RBUTTONUP,
-                   "middle": WM_MBUTTONUP}.get(button, WM_LBUTTONUP)
-        _send_message(hwnd, msg_up, 0, 0)
-        logger.debug(f"注入释放 (消息): btn={button}")
+        our_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        target_tid = ctypes.windll.user32.GetWindowThreadProcessId(hwnd, 0)
+        attached = False
+        if our_tid != target_tid:
+            attached = bool(ctypes.windll.user32.AttachThreadInput(our_tid, target_tid, True))
+        ctypes.windll.user32.SetFocus(hwnd)
+        time.sleep(0.05)
+        if attached:
+            ctypes.windll.user32.AttachThreadInput(our_tid, target_tid, False)
+        logger.debug(f"SetFocus hwnd={hwnd}, attached={attached}")
+
+    @staticmethod
+    def _paste_via_keybd():
+        """通过 keybd_event 模拟 Ctrl+V（系统级键盘注入，不涉及光标）。"""
+        VK_CONTROL = 0x11
+        VK_V = 0x56
+        KEYEVENTF_KEYUP = 0x0002
+
+        user32.keybd_event(VK_CONTROL, 0, 0, 0)
+        time.sleep(0.02)
+        user32.keybd_event(VK_V, 0, 0, 0)
+        time.sleep(0.02)
+        user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.02)
+        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+        time.sleep(0.02)
 
     def type_text(self, text: str):
-        """注入文本：中文用剪贴板 + WM_PASTE，ASCII 用 WM_CHAR"""
+        """注入文本。
+        Edit 控件中文用剪贴板粘贴（WM_CHAR 对非 ASCII 不可靠），
+        其他应用（浏览器/飞书等）所有文字统一用 WM_CHAR 逐字发送。"""
         hwnd = self._keyboard_hwnd
         if not hwnd:
             logger.warning("type_text: 无目标窗口")
             return
 
-        if any(ord(c) > 127 for c in text):
+        class_name = win32gui.GetClassName(hwnd)
+        is_edit = class_name == "Edit" or class_name.startswith("RichEdit")
+
+        if is_edit and any(ord(c) > 127 for c in text):
             import pyperclip
             old_clipboard = pyperclip.paste()
             pyperclip.copy(text)
@@ -258,10 +356,12 @@ class MessageInjector:
                 pyperclip.copy(old_clipboard)
             except Exception:
                 pass
+            logger.debug(f"中文 WM_PASTE -> class={class_name}")
         else:
             for ch in text:
                 _send_message(hwnd, WM_CHAR, ord(ch), 0)
                 time.sleep(0.01)
+            logger.debug(f"WM_CHAR ({len(text)} chars) -> class={class_name}")
         logger.debug(f"注入文本: {text[:20]}{'...' if len(text) > 20 else ''}")
 
     def press_key(self, key: str):
@@ -285,8 +385,14 @@ class MessageInjector:
             logger.debug(f"注入 WM_COPY (复制)")
             return
         if combo == "ctrl+v":
-            _send_message(hwnd, WM_PASTE, 0, 0)
-            logger.debug(f"注入 WM_PASTE (粘贴)")
+            class_name = win32gui.GetClassName(hwnd)
+            if class_name == "Edit" or class_name.startswith("RichEdit"):
+                _send_message(hwnd, WM_PASTE, 0, 0)
+                logger.debug(f"注入 WM_PASTE (粘贴) -> class={class_name}")
+            else:
+                self._focus_window(hwnd)
+                self._paste_via_keybd()
+                logger.debug(f"注入 focus+keybd_event Ctrl+V -> class={class_name}")
             return
         if combo == "ctrl+x":
             _send_message(hwnd, WM_CUT, 0, 0)

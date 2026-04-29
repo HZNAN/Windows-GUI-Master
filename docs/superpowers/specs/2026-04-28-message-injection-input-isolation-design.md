@@ -128,13 +128,104 @@ INPUT_MODE = os.getenv("INPUT_MODE", "message")  # "message" | "virtual" | "norm
 - `agents/` — ReAct loop unchanged
 - `drivers/screen_capture.py` — screenshots unchanged
 
-## Known Limitations
+## Actual Implementation: Hybrid Approach
 
-- UWP apps and some Windows 11 components may not respond well to posted messages
-- Apps that call `GetCursorPos()` internally instead of using message coordinates may misbehave
-- Applications with anti-injection detection (games, security software) may ignore or flag injected messages
-- `GetMessageExtraInfo()` can distinguish `SendInput`-generated messages, though `PostMessage` bypasses most checks
+The initial design assumed all operations could be pure PostMessage/SendMessage. This proved incorrect for several fundamental reasons. The final implementation is a **hybrid**:
+
+| Operation | Edit/RichEdit | Chrome/Browser | Explorer/Feishu/Other |
+|-----------|--------------|----------------|----------------------|
+| click | PostMessage WM_LBUTTONDOWN/UP | same | same |
+| double_click | PostMessage WM_LBUTTONDBLCLK | same | same |
+| scroll | PostMessage WM_MOUSEWHEEL | PostMessage WM_MOUSEWHEEL | mouse_event WHEEL (hidden cursor) |
+| drag | mouse_event (hidden cursor) | same | same |
+| mouse_down/up | mouse_event (hidden cursor) | same | same |
+| type_text (ASCII) | PostMessage WM_CHAR | same | same |
+| type_text (Chinese) | Clipboard + WM_PASTE | PostMessage WM_CHAR (Unicode) | PostMessage WM_CHAR (Unicode) |
+| hotkey Ctrl+V | PostMessage WM_PASTE | focus + keybd_event | focus + keybd_event |
+| hotkey Ctrl+A/C/X | EM_SETSEL/WM_COPY/WM_CUT PostMessage | same | same |
+
+## Pitfalls Discovered
+
+### 1. 纯消息无法实现 drag / mouse_down / mouse_up
+
+**根因：** Windows 拖拽状态机依赖三个系统级状态：
+- `GetAsyncKeyState(VK_LBUTTON)` — 检测物理按键是否按下
+- `GetCapture()` / `SetCapture()` — 鼠标捕获（有线程亲和性）
+- `GetMessagePos()` — 系统维护的最近鼠标消息位置
+
+PostMessage 发送的 `WM_LBUTTONDOWN` 到达时，`GetAsyncKeyState` 返回 0（按钮未按下），控件直接跳过拖拽状态机。
+
+**解决：** 使用透明光标 + `mouse_event`。`_hide_real_cursor()` 用 `SetSystemCursor` 将系统箭头替换为透明 32×32 单色光标，操作完成后 `_show_real_cursor()` 恢复。
+
+### 2. WM_MOUSEWHEEL 对部分窗口无效
+
+**根因：** `WM_MOUSEWHEEL` 消息发送到 `WindowFromPoint` 返回的 hwnd。对于 Explorer（`DirectUIHWND`）和 Feishu（Electron），该 hwnd 是容器窗口，不处理滚轮消息。
+
+**解决：** 非 Edit/Chrome 窗口使用 `mouse_event(MOVE|ABSOLUTE) → mouse_event(WHEEL)` 组合。关键：不能用 `SetCursorPos` 移动光标然后滚轮，必须用 `mouse_event(MOVE|ABSOLUTE)` 生成系统级移动事件，后续 `mouse_event(WHEEL)` 才能识别正确位置。
+
+### 3. WM_PASTE 对非 Edit 控件无效
+
+**根因：** `WM_PASTE` 只在标准 Windows Edit/RichEdit 控件中工作。浏览器（Chromium）和飞书（Electron）的输入框是自渲染的，不处理外部 PostMessage 发来的 `WM_PASTE`。
+
+**尝试：** `keybd_event` 模拟 Ctrl+V — 需要键盘焦点，PostMessage 点击不会转移焦点。
+
+**最终解决：** 非 Edit 控件用 `WM_CHAR` 逐字发送 Unicode 码点。`WM_CHAR` 的 wParam 可以承载 BMP 内所有字符（包括中文 0x4E00-0x9FFF），现代应用（Chromium/Electron）正确处理。
+
+### 4. 双击需要 WM_LBUTTONDBLCLK
+
+**根因：** Windows 双击检测在系统输入管道中完成——连续两次点击在时间窗口（500ms）和空间距离内，系统将第二次 `WM_LBUTTONDOWN` 替换为 `WM_LBUTTONDBLCLK`。两个 PostMessage `WM_LBUTTONDOWN` 只是两次独立点击。
+
+**解决：** 第二击直接发送 `WM_LBUTTONDBLCLK`（0x0203）替代 `WM_LBUTTONDOWN`。
+
+### 5. ShowCursor(False) 不可靠
+
+**根因：** `ShowCursor(False)` 递减显示计数，但某些系统配置下 `SetCursorPos` 或 `mouse_event` 会触发光标重新显示。具体原因可能是显示驱动、辅助功能设置或 DWM 的合成管道。
+
+**解决：** 使用 `SetSystemCursor` 将 OCR_NORMAL 全局替换为透明光标。步骤：
+1. `LoadCursorW(0, OCR_NORMAL)` 获取当前箭头
+2. `CopyImage` 备份
+3. `CreateCursor` 创建 32×32 单色透明光标（AND mask 全 1，XOR mask 全 0）
+4. `SetSystemCursor` 替换
+5. 操作完用备份恢复
+
+所有使用透明光标的操作（drag/mouse_down/scroll）都用 try/finally 确保光标恢复。
+
+### 6. PostMessage Ctrl/Ctrl+A 热键失败
+
+**根因：** `PostMessage(WM_KEYDOWN, VK_CONTROL)` 不会更新系统修饰键状态。`GetAsyncKeyState(VK_CONTROL)` 仍返回 0。同样，`PostMessage(WM_KEYDOWN, ord('A'))` 在没有 Ctrl 状态的情况下就是一个小写字母 'a'。
+
+**解决：** 常见快捷键映射为直接命令消息：
+- `Ctrl+A` → `EM_SETSEL(0, -1)` 全选
+- `Ctrl+C` → `WM_COPY` 复制
+- `Ctrl+V` → `WM_PASTE`（Edit）或 `keybd_event`（非 Edit）
+- `Ctrl+X` → `WM_CUT` 剪切
+
+### 7. keybd_event 需要键盘焦点
+
+**根因：** `keybd_event` 注入的按键事件进入系统输入队列，分发到当前拥有键盘焦点的窗口。PostMessage 点击不会转移键盘焦点。
+
+**解决：** 使用 `AttachThreadInput` + `SetFocus` 在粘贴前强制设焦点：
+```python
+our_tid = GetCurrentThreadId()
+target_tid = GetWindowThreadProcessId(hwnd, 0)
+AttachThreadInput(our_tid, target_tid, True)
+SetFocus(hwnd)
+# ... keybd_event ...
+AttachThreadInput(our_tid, target_tid, False)
+```
+
+### 8. 64-bit LPARAM/WPARAM 截断
+
+**根因：** ctypes 默认将所有参数视为 32-bit。在 64-bit Windows 上，`PostMessageW` 和 `SendMessageW` 的 WPARAM 和 LPARAM 是 64-bit。不设 `argtypes` 会导致高位被截断，MAKELPARAM 坐标损坏。
+
+**解决：** 必须在模块级别设置：
+```python
+user32.PostMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong]
+user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong]
+user32.SendMessageTimeoutW.argtypes = [...]
+user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ctypes.c_ulonglong]
+```
 
 ## Fallback
 
-Set `INPUT_MODE=virtual` in `.env` to revert to the old teleport-based approach at runtime.
+Set `INPUT_MODE=virtual` in `.env` to revert to the teleport-based approach at runtime. Set `INPUT_MODE=normal` for pyautogui direct control.

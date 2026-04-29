@@ -87,24 +87,60 @@ def _on_paint(self):
 
 ---
 
-## 5. PIL rotate 旋转后的裁剪问题
+## 5. 旋转裁剪 2.0 — 数学约束
 
-**问题：** 光标旋转到 45° 时，箭头尖端超出画布被裁剪。
+**原问题（Pitfall #5 初版修复）：** 72×72 画布 + `expand=False` → 中心裁回 24×24 时切掉 5px。
 
-**根因：** `Image.rotate(angle, expand=False)` 保持画布尺寸不变，对角线上的像素超出边界被丢弃。24×24 图片的半对角线约为 17px，超出画布边缘 12px。
+**尝试修复：** 增大画布到 96×96。**结果：无效。**
 
-**尝试：**
-- `expand=True` + 居中裁剪：由于 arrow.png 中箭头并非精确居中，`expand=True` 会导致裁剪后的图像偏移，箭头位置不稳定
+**根因是数学约束，不是画布不够大：**
 
-**最终解决：** 使用 72×72 大画布（边缘余量 24px > 半对角线 17px），旋转后用 `expand=False` 保持像素位置稳定，再中心裁剪回 24×24：
+24×24 的图，旋转 45° 后对角 = 24√2 ≈ 34px。从中心到任意边的最短距离固定为 12px（半宽），而从中心到旋转后顶点的最长距离为 17px（半对角）。**17 > 12 恒成立**，与画布大小无关——无论画布多大，只要最终 crop 回 24×24，就必然裁掉 5px。
 
-```python
-canvas_size = 72  # > 24 * sqrt(2) ≈ 34，留足余量
-padded = Image.new("RGBA", (canvas_size, canvas_size), (0, 0, 0, 0))
-padded.paste(source, ((canvas_size - size) // 2, (canvas_size - size) // 2))
-rotated = padded.rotate(225 - deg, expand=False)
-cropped = rotated.crop((24, 24, 48, 48))  # 中心 24x24
 ```
+24×24 @ 0°:   ████              24×24 @ 45°:    ██
+               ████                             ████
+               ████                            ██████
+               ████                             ████
+                ← 24 →                           ██
+                                               ← 34 →
+                                               crop 24 框装不下
+```
+
+**尝试 expand=True + resize 回 24：** 旋转后 34px 强制缩回 24px（71%），光标在 45° 明显变小，产生"忽大忽小"效果——**比裁剪更糟。**
+
+**最终方案：接受自然展开**
+
+| 改动 | 之前 | 之后 |
+|------|------|------|
+| 窗口尺寸 | 24×24 | **48×48** |
+| 光标图标尺寸 | 固定 24×24 | **24~34×24~34（实际尺寸）** |
+| 旋转方式 | canvas + expand=False | **expand=True** |
+| 是否裁剪 | 45° 时被切 | **不裁剪** |
+| 是否缩水 | 强制 crop 回 24 | **不缩水** |
+
+关键代码改动：
+```python
+# _build_angle_cache: expand=True + 方形 padding + 存实际尺寸
+rotated = source.rotate(225 - deg, resample=Image.BICUBIC, expand=True)
+rw, rh = rotated.size
+use_size = max(rw, rh)
+if rw != rh:
+    square = Image.new("RGBA", (use_size, use_size), (0, 0, 0, 0))
+    square.paste(rotated, ((use_size - rw) // 2, (use_size - rh) // 2))
+    rotated = square
+cache[deg] = (hicon, use_size)  # 存 (hicon, 实际尺寸)
+
+# set_angle: 更新当前图标尺寸
+self._current_icon_size = icon_size
+
+# _paint_direct: 用实际尺寸居中绘制
+icon_sz = self._current_icon_size
+offset = (self._size - icon_sz) // 2
+DrawIconEx(dc, offset, offset, hicon, icon_sz, icon_sz, ...)
+```
+
+40° 时光标比 0° 稍"宽"（34 vs 24），但视觉上这是自然的"展开"，远好过裁剪或缩水。
 
 ---
 
@@ -238,7 +274,7 @@ move_to 调用
 | 2 | HICON 不可见 | Win32 API | CreateIconIndirect 不兼容 32bpp alpha 位图 |
 | 3 | 黑块/图像叠加 | Win32 GDI | WM_ERASEBKGND 返回 1 跳过了背景清除 |
 | 4 | 指向方向错误 | 坐标变换 | 设计假设的图片朝向与实际图片不符 |
-| 5 | 旋转裁剪 | 图像处理 | 旋转超出画布边界，expand=False 丢弃像素 |
+| 5 | 旋转裁剪 | 图像处理/数学约束 | 24×24 对角 34px 恒 > 12px 半宽，任意画布 crop 回 24 必裁 5px；最终用 expand=True + 自然展开尺寸 |
 | 6 | 角度跳变 | 数值计算 | ±180° 边界处插值走了远路 |
 | 7 | 旋转瞬变 | 动画设计 | 全时长旋转"边转边走"不自然，改为 wind-up |
 | 8 | idle wobble 不晃动 | Win32 GDI | daemon 线程 UpdateWindow→BeginPaint 行为未定义 |
