@@ -18,13 +18,28 @@ from tools.agent import finish, continue_steps, retry, ask_human
 STATE_TOOLS = {"finish", "continue_steps", "retry"}
 
 
-def _load_system_prompt() -> str:
-    """从文件加载系统提示词"""
-    prompt_path = Path(__file__).parent.parent / "prompts" / "system_prompt.txt"
-    return prompt_path.read_text(encoding="utf-8")
+_PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system_prompt.txt"
+_PROMPT_TEMPLATE = _PROMPT_PATH.read_text(encoding="utf-8")
 
 
-SYSTEM_PROMPT = _load_system_prompt()
+def _build_system_prompt() -> str:
+    """构建系统提示词，用当前 grid 配置填充占位符"""
+    from config.settings import GRID_WIDTH, GRID_HEIGHT
+    from tools.screen import _nice_step
+
+    gw, gh = GRID_WIDTH, GRID_HEIGHT
+    gsx = _nice_step(gw)
+    gsy = _nice_step(gh)
+    return _PROMPT_TEMPLATE.format(
+        grid_width=gw,
+        grid_height=gh,
+        grid_step_x=gsx,
+        grid_step_y=gsy,
+        tick_step_x=max(gsx // 2, 10),
+        tick_step_y=max(gsy // 2, 10),
+        center_x=gw // 2,
+        center_y=gh // 2,
+    )
 
 
 @dataclass
@@ -348,7 +363,7 @@ class ReactAgentLoop:
                     ]
 
                 messages = [
-                    SystemMessage(content=SYSTEM_PROMPT),
+                    SystemMessage(content=_build_system_prompt()),
                     HumanMessage(content=user_content),
                 ]
 
