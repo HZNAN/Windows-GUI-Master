@@ -79,21 +79,23 @@ Two transport modes:
 | `virtual` | `InputControl(virtual_mode=True)` | SetCursorPos + mouse_event (save/restore) | Brief flicker |
 | `normal` | `InputControl()` | pyautogui | Full real cursor |
 
-**MessageInjector** (`drivers/message_injector.py`): Hybrid injection driver. Pure `PostMessage`/`SendMessage` for transient operations (click, type ASCII, double_click). For operations that fundamentally require system input state (drag, mouse_down/up, scroll on non-Edit windows), uses hidden real cursor + `mouse_event` with `SetSystemCursor` transparent cursor replacement.
+**MessageInjector** (`drivers/message_injector.py`): Hybrid injection driver. Mouse: `PostMessage` for client-area clicks/double-clicks, `mouse_event` + hidden cursor for non-client area (title bar) and long ops (drag/scroll on non-Edit). Keyboard: all operations (`type_text`/`hotkey`/`press_key`/`key_down`/`key_up`) use `keybd_event` system-level injection with `GetGUIThreadInfo` cross-thread focus detection. Exception: Chinese text on Edit controls uses clipboard `WM_PASTE` (keybd_event can't generate IME sequences).
 
 **Message injection dispatch table:**
 
-| Operation | Edit/RichEdit | Chrome/Browser | Explorer/Feishu/Other |
-|-----------|--------------|----------------|----------------------|
-| click | PostMessage WM_LBUTTONDOWN/UP | same | same |
-| double_click | PostMessage WM_LBUTTONDBLCLK | same | same |
-| scroll | PostMessage WM_MOUSEWHEEL | PostMessage WM_MOUSEWHEEL | mouse_event WHEEL (hidden cursor) |
-| drag | mouse_event (hidden cursor) | same | same |
-| mouse_down/up | mouse_event (hidden cursor) | same | same |
-| type_text (ASCII) | PostMessage WM_CHAR | same | same |
-| type_text (Chinese) | Clipboard + WM_PASTE | PostMessage WM_CHAR (Unicode) | same |
-| hotkey Ctrl+V | PostMessage WM_PASTE | focus + keybd_event | same |
-| hotkey Ctrl+A/C/X | EM_SETSEL/WM_COPY/WM_CUT | same | same |
+| Operation | Method | Notes |
+|-----------|--------|-------|
+| click (client area) | PostMessage WM_LBUTTONDOWN/UP | |
+| click (non-client: title bar, close button) | mouse_event + hidden cursor | cx/cy < 0 triggers fallback |
+| double_click | PostMessage WM_LBUTTONDBLCLK (client) / mouse_event (non-client) | |
+| scroll (Edit/Chrome) | PostMessage WM_MOUSEWHEEL | |
+| scroll (other) | mouse_event WHEEL + hidden cursor | |
+| drag / mouse_down / mouse_up | mouse_event + hidden cursor | |
+| type_text (ASCII, all windows) | keybd_event via VkKeyScanW | system-level, works on any focused control |
+| type_text (Chinese, Edit) | Clipboard WM_PASTE | only case still using PostMessage |
+| type_text (Chinese, non-Edit) | keybd_event via VkKeyScanW | |
+| hotkey (all combos) | keybd_event | covers all system/app hotkeys |
+| hotkey ALT+F4 | WM_SYSCOMMAND SC_CLOSE | direct command, most reliable |
 
 **Virtual Cursor** (`core/virtual_cursor.py` + `drivers/win32_overlay.py`): Animated cursor overlay using cubic Bezier curves. Rotates to face movement direction, with wind-up/wind-down rotation and idle wobble (12° sinusoidal at 0.83Hz). Rendered via Win32 layered window with `DrawIconEx`.
 
@@ -105,9 +107,10 @@ Screenshots are resized to `GRID_WIDTH` × `GRID_HEIGHT` (default 1000×1000, se
 
 - **State tools**: Every turn must end with `finish()`, `continue_steps()`, or `retry()` — the last tool call in a multi-tool response must be a state tool
 - **History window**: Sliding window of 3 turns; `(check)` items need verification from next screenshot, `(success)`/`(fail)` track outcomes
-- **Chinese text input**: Edit controls use clipboard + `WM_PASTE`; all other windows use `WM_CHAR` with Unicode codepoints (no clipboard needed)
+- **Chinese text input**: Edit controls use clipboard `WM_PASTE`; all other windows use `keybd_event` via `VkKeyScanW` (IME-free Unicode input)
 - **Cursor hiding**: Long operations replace the system arrow cursor with a transparent 32×32 monochrome cursor via `SetSystemCursor`, restored on completion with `try/finally`
-- **Keyboard injection**: `keybd_event` requires the target window to have keyboard focus (`AttachThreadInput` + `SetFocus`); `WM_CHAR` via PostMessage does not
+- **Keyboard injection**: All keyboard ops use `keybd_event` system-level injection. Focus obtained via `GetGUIThreadInfo` (cross-thread safe, unlike `GetFocus()` which only returns same-thread focus). `AttachThreadInput` + `SetFocus` only called when target doesn't already have focus
+- **Non-client area clicks**: Detected by `ScreenToClient` returning negative coordinates; fall back to `mouse_event` with hidden cursor for physical click on title bar buttons
 - **Human-in-the-loop**: Agent can call `ask_human(question)` tool to pause and wait for human input. The tool blocks the agent thread via `threading.Event`; the main thread polls `AgentSession.is_waiting()` and returns `stopReason: "needs_human"` to the client. The next prompt to the same session is treated as the human's answer and injected via `inject_answer()`, waking the agent thread. The human response flows into history via the normal `current_turn_operations` → `_update_history` pipeline. Session state bridging is in `core/agent_service.py::AgentSession`
 - **session/update notifications**: During prompt processing, the agent pushes real-time events (tool_call, tool_result, agent_message_chunk) into `AgentSession.notification_queue`. The main thread drains this queue during polling and sends `session/update` JSON-RPC notifications (no `id` — fire-and-forget) to the client via stdout (stdio) or WebSocket. Notification types go in `params.sessionUpdate`, matching OpenClaw ACP spec
 
