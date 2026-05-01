@@ -165,6 +165,12 @@ class MessageInjector:
             logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
             return
 
+        # UWP/Modern 窗口不响应 PostMessage → 物理点击
+        class_name = win32gui.GetClassName(hwnd)
+        if self._is_uwp_window(class_name):
+            self._click_via_mouse_event(x, y, button)
+            return
+
         # 非客户区（cx 或 cy 为负，如标题栏按钮）→ mouse_event 物理点击
         if cx < 0 or cy < 0:
             self._click_via_mouse_event(x, y, button)
@@ -216,11 +222,25 @@ class MessageInjector:
     def _post(hwnd, msg, wparam, lparam):
         _send_message(hwnd, msg, wparam, lparam)
 
+    @staticmethod
+    def _is_uwp_window(class_name: str) -> bool:
+        """UWP/Modern 窗口不响应 PostMessage 鼠标消息，必须用 mouse_event"""
+        return any(kw in class_name for kw in (
+            "CoreWindow", "ApplicationFrame", "SearchHost", "SearchPane",
+        ))
+
     def double_click(self, x: int, y: int, button: str = "left"):
         """双击：第一次 click，第二次用 WM_LBUTTONDBLCLK 触发双击行为"""
         hwnd, cx, cy = self._find_window_and_pos(x, y)
         if hwnd is None:
             logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
+            return
+
+        # UWP 窗口 → 物理点击
+        if self._is_uwp_window(win32gui.GetClassName(hwnd)):
+            self._click_via_mouse_event(x, y, button)
+            time.sleep(0.05)
+            self._click_via_mouse_event(x, y, button)
             return
 
         # 非客户区 → mouse_event 物理点击
