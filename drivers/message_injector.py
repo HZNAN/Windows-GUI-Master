@@ -17,7 +17,6 @@ import win32gui
 
 # Win32 常量
 OCR_NORMAL = 32512  # 标准箭头光标 ID
-IMAGE_CURSOR = 2
 
 WHEEL_DELTA = 120
 
@@ -51,12 +50,15 @@ class MessageInjector:
     def _hide_real_cursor(self):
         """替换系统箭头光标为透明光标，使真实光标彻底不可见"""
         h_arrow = ctypes.windll.user32.LoadCursorW(0, OCR_NORMAL)
-        if h_arrow:
-            self._backup_arrow = ctypes.windll.user32.CopyImage(
-                h_arrow, IMAGE_CURSOR, 0, 0, 0x00004000  # LR_COPYFROMRESOURCE
-            )
-        if not getattr(self, '_backup_arrow', 0):
-            logger.warning("无法备份系统箭头光标，光标隐藏可能失效")
+        if not h_arrow:
+            logger.warning("无法加载系统箭头光标")
+            return
+
+        # CopyCursor 复制已加载的光标句柄；CopyImage(...,LR_COPYFROMRESOURCE)
+        # 用于 EXE 资源不是句柄，之前这里用错了导致 CopyImage 失败
+        self._backup_arrow = ctypes.windll.user32.CopyCursor(h_arrow)
+        if not self._backup_arrow:
+            logger.warning(f"CopyCursor 失败: {ctypes.get_last_error()}")
             return
 
         h_invis = self._create_invisible_cursor()
@@ -67,9 +69,10 @@ class MessageInjector:
                 logger.debug("系统光标已替换为透明光标")
 
     def _show_real_cursor(self):
-        """恢复系统箭头光标（替换回备份的正常光标）"""
+        """恢复系统箭头光标"""
         if getattr(self, '_backup_arrow', 0):
             ctypes.windll.user32.SetSystemCursor(self._backup_arrow, OCR_NORMAL)
+            ctypes.windll.user32.DestroyCursor(self._backup_arrow)
             self._backup_arrow = 0
             logger.debug("系统箭头光标已恢复")
 
