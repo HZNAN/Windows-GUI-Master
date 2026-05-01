@@ -32,11 +32,7 @@ WM_CHAR = 0x0102
 WM_SYSCOMMAND = 0x0112
 WM_SETFOCUS = 0x0007
 WM_PASTE = 0x0302
-WM_COPY = 0x0301
-WM_CUT = 0x0300
 SC_CLOSE = 0xF060
-EM_SETSEL = 0x00B1
-EM_CHARFROMPOS = 0x00D7
 KEYEVENTF_KEYUP = 0x0002
 WHEEL_DELTA = 120
 MK_LBUTTON = 0x0001
@@ -348,24 +344,10 @@ class MessageInjector:
             ctypes.windll.user32.AttachThreadInput(our_tid, target_tid, False)
         logger.debug(f"SetFocus hwnd={hwnd}, attached={attached}")
 
-    @staticmethod
-    def _paste_via_keybd():
-        """通过 keybd_event 模拟 Ctrl+V（系统级键盘注入）。"""
-        VK_CONTROL = 0x11
-        VK_V = 0x56
-        user32.keybd_event(VK_CONTROL, 0, 0, 0)
-        time.sleep(0.02)
-        user32.keybd_event(VK_V, 0, 0, 0)
-        time.sleep(0.02)
-        user32.keybd_event(VK_V, 0, KEYEVENTF_KEYUP, 0)
-        time.sleep(0.02)
-        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-        time.sleep(0.02)
-
     def type_text(self, text: str):
-        """注入文本。
-        Edit/RichEdit 控件：ASCII 用 WM_CHAR，中文用剪贴板粘贴。
-        其他窗口（浏览器/系统对话框/飞书等）：keybd_event 系统级键盘注入。"""
+        """注入文本。统一使用 keybd_event 系统级键盘注入。
+
+        Edit 控件的中文文本走剪贴板粘贴（keybd_event 无法生成 IME 序列）。"""
         hwnd = self._keyboard_hwnd
         if not hwnd:
             logger.warning("type_text: 无目标窗口")
@@ -374,28 +356,21 @@ class MessageInjector:
         class_name = win32gui.GetClassName(hwnd)
         is_edit = class_name == "Edit" or class_name.startswith("RichEdit")
 
-        if is_edit:
-            if any(ord(c) > 127 for c in text):
-                import pyperclip
-                old_clipboard = pyperclip.paste()
-                pyperclip.copy(text)
-                time.sleep(0.1)
-                _send_message(hwnd, WM_PASTE, 0, 0)
-                time.sleep(0.1)
-                try:
-                    pyperclip.copy(old_clipboard)
-                except Exception:
-                    pass
-                logger.debug(f"中文 WM_PASTE -> class={class_name}")
-            else:
-                for ch in text:
-                    _send_message(hwnd, WM_CHAR, ord(ch), 0)
-                    time.sleep(0.01)
-                logger.debug(f"WM_CHAR ({len(text)} chars) -> class={class_name}")
+        if is_edit and any(ord(c) > 127 for c in text):
+            import pyperclip
+            old_clipboard = pyperclip.paste()
+            pyperclip.copy(text)
+            time.sleep(0.1)
+            _send_message(hwnd, WM_PASTE, 0, 0)
+            time.sleep(0.1)
+            try:
+                pyperclip.copy(old_clipboard)
+            except Exception:
+                pass
+            logger.debug(f"中文 WM_PASTE -> class={class_name}")
         else:
             self._focus_window(hwnd)
             self._type_via_keybd(text)
-            logger.debug(f"keybd_event ({len(text)} chars) -> class={class_name}")
 
         logger.debug(f"注入文本: {text[:20]}{'...' if len(text) > 20 else ''}")
 
@@ -426,42 +401,17 @@ class MessageInjector:
         logger.debug(f"注入按键: {key}")
 
     def hotkey(self, *keys: str):
-        """注入组合键。系统级热键用 keybd_event，文本编辑快捷键优先用命令消息"""
+        """注入组合键。统一使用 keybd_event 系统级键盘注入。"""
         combo = '+'.join(k.lower().strip() for k in keys)
         hwnd = self._keyboard_hwnd
 
-        # ALT+F4 → 直接发 WM_SYSCOMMAND(SC_CLOSE) 关闭窗口
+        # ALT+F4 → WM_SYSCOMMAND(SC_CLOSE)，比模拟按键更可靠
         if combo == "alt+f4":
             if hwnd:
                 _send_message(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
                 logger.debug(f"注入 WM_SYSCOMMAND SC_CLOSE -> hwnd={hwnd}")
             return
 
-        # 文本编辑快捷键 → 直接命令消息（绕过焦点依赖，更可靠）
-        if combo == "ctrl+a":
-            _send_message(hwnd, EM_SETSEL, 0, -1)
-            logger.debug("注入 EM_SETSEL (全选)")
-            return
-        if combo == "ctrl+c":
-            _send_message(hwnd, WM_COPY, 0, 0)
-            logger.debug("注入 WM_COPY (复制)")
-            return
-        if combo == "ctrl+v":
-            class_name = win32gui.GetClassName(hwnd)
-            if class_name == "Edit" or class_name.startswith("RichEdit"):
-                _send_message(hwnd, WM_PASTE, 0, 0)
-                logger.debug(f"注入 WM_PASTE (粘贴) -> class={class_name}")
-            else:
-                self._focus_window(hwnd)
-                self._paste_via_keybd()
-                logger.debug(f"注入 focus+keybd_event Ctrl+V -> class={class_name}")
-            return
-        if combo == "ctrl+x":
-            _send_message(hwnd, WM_CUT, 0, 0)
-            logger.debug("注入 WM_CUT (剪切)")
-            return
-
-        # 所有其他组合键 → keybd_event（系统级注入，覆盖全部热键）
         self._focus_window(hwnd)
         vks = [_key_to_vk(k) for k in keys]
         valid = [vk for vk in vks if vk]
