@@ -17,6 +17,7 @@ import win32gui
 
 # Win32 常量
 OCR_NORMAL = 32512  # 标准箭头光标 ID
+IMAGE_CURSOR = 2
 
 WHEEL_DELTA = 120
 
@@ -54,11 +55,12 @@ class MessageInjector:
             logger.warning("无法加载系统箭头光标")
             return
 
-        # CopyCursor 复制已加载的光标句柄；CopyImage(...,LR_COPYFROMRESOURCE)
-        # 用于 EXE 资源不是句柄，之前这里用错了导致 CopyImage 失败
-        self._backup_arrow = ctypes.windll.user32.CopyCursor(h_arrow)
+        # CopyImage(handle, IMAGE_CURSOR, 0, 0, 0) — flags=0 复制已加载句柄
+        # 之前用 LR_COPYFROMRESOURCE 是从 EXE 资源复制导致失败
+        self._backup_arrow = ctypes.windll.user32.CopyImage(
+            h_arrow, IMAGE_CURSOR, 0, 0, 0)
         if not self._backup_arrow:
-            logger.warning(f"CopyCursor 失败: {ctypes.get_last_error()}")
+            logger.warning(f"CopyImage 备份光标失败: {ctypes.get_last_error()}")
             return
 
         h_invis = self._create_invisible_cursor()
