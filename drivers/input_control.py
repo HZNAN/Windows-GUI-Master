@@ -188,28 +188,18 @@ class InputControl:
 
     # ============ 键盘操作 ============
 
-    def type_text(self, text: str, interval: float = 0.05):
-        """
-        输入文本（逐字输入或粘贴）
-
-        Args:
-            text: 要输入的文本
-            interval: 每个字符之间的间隔（秒）
-        """
-        if self.message_mode:
-            self._injector.type_text(text)
-        elif any(ord(c) > 127 for c in text):
-            # 使用剪贴板粘贴方式输入中文
+    def type_text(self, text: str, interval: float = 0.02):
+        """输入文本（逐字输入或中文剪贴板粘贴）"""
+        if any(ord(c) > 127 for c in text):
             import pyperclip
             old_clipboard = pyperclip.paste()
             pyperclip.copy(text)
             time.sleep(0.1)
             pyautogui.hotkey('ctrl', 'v')
             time.sleep(0.1)
-            # 恢复剪贴板内容
             try:
                 pyperclip.copy(old_clipboard)
-            except:
+            except Exception:
                 pass
             logger.debug(f"剪贴板粘贴文本: {text[:20]}{'...' if len(text) > 20 else ''}")
         else:
@@ -217,53 +207,23 @@ class InputControl:
             logger.debug(f"键盘输入文本: {text[:20]}{'...' if len(text) > 20 else ''}")
 
     def press_key(self, key: str):
-        """
-        按下一个键
-
-        Args:
-            key: 按键名称，支持的键包括:
-                 Enter, Tab, Escape, Space, Backspace
-                 a-z, 0-9, F1-F12
-                 shift, ctrl, alt, esc
-                 up, down, left, right, home, end, pageup, pagedown
-        """
-        if self.message_mode:
-            self._injector.press_key(key)
-        else:
-            key_code = self._parse_key(key)
-            pyautogui.press(key_code)
+        """按下一个键 (enter/tab/escape/backspace/f1-f12 等)"""
+        pyautogui.press(key)
         logger.debug(f"按键: {key}")
 
     def key_down(self, key: str):
         """按下并保持（不释放）"""
-        if self.message_mode:
-            self._injector.key_down(key)
-        else:
-            key_code = self._parse_key(key)
-            pyautogui.keyDown(key_code)
+        pyautogui.keyDown(key)
         logger.debug(f"按键按下: {key}")
 
     def key_up(self, key: str):
         """释放按键"""
-        if self.message_mode:
-            self._injector.key_up(key)
-        else:
-            key_code = self._parse_key(key)
-            pyautogui.keyUp(key_code)
+        pyautogui.keyUp(key)
         logger.debug(f"按键释放: {key}")
 
     def hotkey(self, *keys: str):
-        """
-        发送组合键
-
-        Args:
-            *keys: 组合键列表，如 hotkey("ctrl", "a") 全选
-        """
-        if self.message_mode:
-            self._injector.hotkey(*keys)
-        else:
-            parsed_keys = [self._parse_key(k) for k in keys]
-            pyautogui.hotkey(*parsed_keys)
+        """发送组合键，如 hotkey('ctrl', 'a') 全选"""
+        pyautogui.hotkey(*keys)
         logger.debug(f"组合键: {'+'.join(keys)}")
 
     # ============ 辅助方法 ============
@@ -272,45 +232,6 @@ class InputControl:
     def _sleep(seconds: float = 0.1):
         """等待"""
         time.sleep(seconds)
-
-    @staticmethod
-    def _parse_key(key: str) -> str:
-        """将字符串按键名转换为 pyautogui 格式"""
-        key = key.strip().lower()
-
-        # 标准化按键名
-        key_map = {
-            # 字母（pyautogui 直接支持）
-            "a": "a", "b": "b", "c": "c", "d": "d", "e": "e",
-            "f": "f", "g": "g", "h": "h", "i": "i", "j": "j",
-            "k": "k", "l": "l", "m": "m", "n": "n", "o": "o",
-            "p": "p", "q": "q", "r": "r", "s": "s", "t": "t",
-            "u": "u", "v": "v", "w": "w", "x": "x", "y": "y", "z": "z",
-            # 数字
-            "0": "0", "1": "1", "2": "2", "3": "3", "4": "4",
-            "5": "5", "6": "6", "7": "7", "8": "8", "9": "9",
-            # 功能键
-            "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4", "f5": "f5",
-            "f6": "f6", "f7": "f7", "f8": "f8", "f9": "f9",
-            "f10": "f10", "f11": "f11", "f12": "f12",
-            # 特殊键
-            "enter": "enter", "return": "enter",
-            "tab": "tab", "escape": "esc", "esc": "esc",
-            "space": "space", "backspace": "backspace",
-            "delete": "delete",
-            "up": "up", "down": "down", "left": "left", "right": "right",
-            "home": "home", "end": "end",
-            "pageup": "pageup", "pagedown": "pagedown",
-            "shift": "shift", "leftshift": "shift", "rightshift": "shift",
-            "ctrl": "ctrl", "leftctrl": "ctrl", "rightctrl": "ctrl",
-            "alt": "alt", "leftalt": "alt", "rightalt": "alt",
-            "win": "win", "lwin": "win", "rwin": "rwin",
-        }
-
-        result = key_map.get(key)
-        if result is None:
-            raise ValueError(f"不支持的按键: {key}")
-        return result
 
 
 # 全局单例
