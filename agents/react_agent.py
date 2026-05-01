@@ -12,10 +12,10 @@ from langchain_openai import ChatOpenAI
 from tools.screen import screenshot
 from tools.mouse import click, move_mouse, double_click, right_click, scroll, drag
 from tools.keyboard import type_text, press_key, hotkey, key_down, key_up, wait
-from tools.agent import finish, continue_steps, retry, ask_human
+from tools.agent import finish, ask_human
 
-# 状态工具名称
-STATE_TOOLS = {"finish", "continue_steps", "retry"}
+# 独立状态工具（finish 终止任务，continue/retry 通过动作工具的 step_type 参数表达）
+STATE_TOOLS = {"finish"}
 
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "system_prompt.txt"
@@ -83,7 +83,7 @@ class ReactAgentLoop:
                 click, move_mouse, double_click, right_click, scroll, drag,
                 type_text, press_key, hotkey, key_down, key_up, wait,
                 ask_human,
-                finish, continue_steps, retry
+                finish,
             ],
             tool_choice="auto"
         )
@@ -122,33 +122,33 @@ class ReactAgentLoop:
                 result = click.func(**args)
                 grid_x = args.get('grid_x', args.get('x', 0))
                 grid_y = args.get('grid_y', args.get('y', 0))
-                return f"[click] grid_x={grid_x}, grid_y={grid_y} | Result: Clicked at ({grid_x}, {grid_y})"
+                return f"[click] grid_x={grid_x}, grid_y={grid_y} | {result}"
             elif tool_name == "move_mouse":
                 result = move_mouse.func(**args)
                 grid_x = args.get('grid_x', args.get('x', 0))
                 grid_y = args.get('grid_y', args.get('y', 0))
-                return f"[move_mouse] grid_x={grid_x}, grid_y={grid_y} | Result: Moved to ({grid_x}, {grid_y})"
+                return f"[move_mouse] grid_x={grid_x}, grid_y={grid_y} | {result}"
             elif tool_name == "double_click":
                 result = double_click.func(**args)
                 grid_x = args.get('grid_x', 0)
                 grid_y = args.get('grid_y', 0)
-                return f"[double_click] grid_x={grid_x}, grid_y={grid_y} | Result: Double clicked at ({grid_x}, {grid_y})"
+                return f"[double_click] grid_x={grid_x}, grid_y={grid_y} | {result}"
             elif tool_name == "right_click":
                 result = right_click.func(**args)
                 grid_x = args.get('grid_x', 0)
                 grid_y = args.get('grid_y', 0)
-                return f"[right_click] grid_x={grid_x}, grid_y={grid_y} | Result: Right clicked at ({grid_x}, {grid_y})"
+                return f"[right_click] grid_x={grid_x}, grid_y={grid_y} | {result}"
             elif tool_name == "type_text":
                 result = type_text.func(**args)
                 text = args.get('text', '')
                 grid_x = args.get('grid_x')
                 grid_y = args.get('grid_y')
                 coord_str = f" at ({grid_x}, {grid_y})" if grid_x is not None else ""
-                return f"[type_text] text='{text}'{coord_str} | Result: Typed '{text}'"
+                return f"[type_text] text='{text}'{coord_str} | {result}"
             elif tool_name == "press_key":
                 result = press_key.func(**args)
                 key = args.get('key', '')
-                return f"[press_key] key='{key}' | Result: Pressed {key}"
+                return f"[press_key] key='{key}' | {result}"
             elif tool_name == "wait":
                 result = wait.func(**args)
                 return f"[wait] | Result: {result}"
@@ -157,41 +157,33 @@ class ReactAgentLoop:
                 grid_x = args.get('grid_x', 0)
                 grid_y = args.get('grid_y', 0)
                 amount = args.get('amount', 3)
-                return f"[scroll] grid_x={grid_x}, grid_y={grid_y}, amount={amount} | Result: Scroll at ({grid_x}, {grid_y})"
+                return f"[scroll] grid_x={grid_x}, grid_y={grid_y}, amount={amount} | {result}"
             elif tool_name == "drag":
                 result = drag.func(**args)
                 grid_x1 = args.get('grid_x1', 0)
                 grid_y1 = args.get('grid_y1', 0)
                 grid_x2 = args.get('grid_x2', 0)
                 grid_y2 = args.get('grid_y2', 0)
-                return f"[drag] from ({grid_x1}, {grid_y1}) to ({grid_x2}, {grid_y2}) | Result: Dragged"
+                return f"[drag] from ({grid_x1}, {grid_y1}) to ({grid_x2}, {grid_y2}) | {result}"
             elif tool_name == "hotkey":
                 result = hotkey.func(**args)
                 keys = args.get('keys', '')
-                return f"[hotkey] keys='{keys}' | Result: Hotkey pressed"
+                return f"[hotkey] keys='{keys}' | {result}"
             elif tool_name == "key_down":
                 result = key_down.func(**args)
                 key = args.get('key', '')
-                return f"[key_down] key='{key}' | Result: Key down"
+                return f"[key_down] key='{key}' | {result}"
             elif tool_name == "key_up":
                 result = key_up.func(**args)
                 key = args.get('key', '')
-                return f"[key_up] key='{key}' | Result: Key up"
+                return f"[key_up] key='{key}' | {result}"
             elif tool_name == "finish":
-                result = finish.func()
+                finish.func()
                 return f"[finish] | Result: TASK_COMPLETED"
-            elif tool_name == "continue_steps":
-                reason = args.get('reason', '')
-                continue_steps.func(reason=reason)
-                return f"[continue_steps] reason='{reason}' | Result: CONTINUE"
-            elif tool_name == "retry":
-                reason = args.get('reason', '')
-                retry.func(reason=reason)
-                return f"[retry] reason='{reason}' | Result: RETRY"
             elif tool_name == "ask_human":
                 result = ask_human.func(**args)
                 question = args.get('question', '')
-                return f"[ask_human] question='{question}' | Human response: {result}"
+                return f"[ask_human] question='{question}' | 人类回答: {result}"
             else:
                 return f"[unknown] | Result: Unknown tool: {tool_name}"
         except Exception as e:
@@ -397,6 +389,8 @@ class ReactAgentLoop:
                 logger.info(f"[OUTPUT] Tool calls: {tc_names}")
 
                 current_turn_operations = []
+                _last_step_type = "continue"
+                _last_reason = ""
 
                 for tc in response.tool_calls:
                     tool_name = self._clean_tool_name(tc.get("name", ""))
@@ -450,19 +444,19 @@ class ReactAgentLoop:
 
                     else:
                         current_turn_operations.append((tool_name, result))
+                        # 从动作工具参数中提取 step_type 和 reason
+                        _last_step_type = tool_args.get("step_type", "continue")
+                        _last_reason = tool_args.get("reason", "")
 
                 self._append_turn_log(step_count, prev_result_text, content, str(tc_names))
 
-                last_tool = self._clean_tool_name(
-                    response.tool_calls[-1].get("name", "")
+                # 根据动作工具的 step_type 确定本轮状态
+                st = _last_step_type if _last_step_type in ("continue", "retry") else "continue"
+                rsn = _last_reason if _last_reason else "操作已执行"
+                logger.info(f"[STEP] step_type={st}, reason={rsn[:50]}")
+                history_turns = self._update_history(
+                    history_turns, current_turn_operations, rsn, st
                 )
-                if last_tool not in STATE_TOOLS:
-                    logger.warning(f"模型未调用状态工具，自动补入 continue_steps")
-                    history_turns = self._update_history(
-                        history_turns, current_turn_operations,
-                        "(auto) 模型未给出状态判断", "continue"
-                    )
-                    continue
 
             result = ReactResult(
                 goal=self.goal,
