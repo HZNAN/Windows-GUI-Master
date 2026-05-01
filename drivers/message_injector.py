@@ -28,10 +28,6 @@ WM_MBUTTONDOWN = 0x0207
 WM_MBUTTONUP = 0x0208
 WM_MOUSEMOVE = 0x0200
 WM_MOUSEWHEEL = 0x020A
-WM_KEYDOWN = 0x0100
-WM_KEYUP = 0x0101
-WM_SYSKEYDOWN = 0x0104
-WM_SYSKEYUP = 0x0105
 WM_CHAR = 0x0102
 WM_SYSCOMMAND = 0x0112
 WM_SETFOCUS = 0x0007
@@ -41,6 +37,7 @@ WM_CUT = 0x0300
 SC_CLOSE = 0xF060
 EM_SETSEL = 0x00B1
 EM_CHARFROMPOS = 0x00D7
+KEYEVENTF_KEYUP = 0x0002
 WHEEL_DELTA = 120
 MK_LBUTTON = 0x0001
 MK_RBUTTON = 0x0002
@@ -62,19 +59,11 @@ user32.SendMessageW.argtypes = [
     ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong,
 ]
 user32.SendMessageW.restype = ctypes.c_longlong
-user32.MapVirtualKeyW.argtypes = [ctypes.c_uint, ctypes.c_uint]
-user32.MapVirtualKeyW.restype = ctypes.c_uint
 user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ctypes.c_ulonglong]
 user32.keybd_event.restype = None
 
-MAPVK_VK_TO_VSC = 0
 SMTO_NORMAL = 0x0000
 SENDMSG_TIMEOUT = 100  # ms
-
-
-def _vk_to_scancode(vk: int) -> int:
-    """虚拟键码 → 硬件扫描码"""
-    return user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
 
 
 def _send_message(hwnd: int, msg: int, wparam: int, lparam: int) -> bool:
@@ -359,11 +348,9 @@ class MessageInjector:
 
     @staticmethod
     def _paste_via_keybd():
-        """通过 keybd_event 模拟 Ctrl+V（系统级键盘注入，不涉及光标）。"""
+        """通过 keybd_event 模拟 Ctrl+V（系统级键盘注入）。"""
         VK_CONTROL = 0x11
         VK_V = 0x56
-        KEYEVENTF_KEYUP = 0x0002
-
         user32.keybd_event(VK_CONTROL, 0, 0, 0)
         time.sleep(0.02)
         user32.keybd_event(VK_V, 0, 0, 0)
@@ -407,30 +394,30 @@ class MessageInjector:
     def press_key(self, key: str):
         vk = _key_to_vk(key)
         if vk:
-            self._post_key(vk)
+            self._focus_window(self._keyboard_hwnd)
+            self._inject_key(vk)
         logger.debug(f"注入按键: {key}")
 
     def hotkey(self, *keys: str):
-        """注入组合键。常见快捷键用直接命令消息，通用情况用 keyboard 模拟"""
+        """注入组合键。系统级热键用 keybd_event，文本编辑快捷键优先用命令消息"""
         combo = '+'.join(k.lower().strip() for k in keys)
         hwnd = self._keyboard_hwnd
 
         # ALT+F4 → 直接发 WM_SYSCOMMAND(SC_CLOSE) 关闭窗口
         if combo == "alt+f4":
-            hwnd = self._keyboard_hwnd
             if hwnd:
                 _send_message(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
                 logger.debug(f"注入 WM_SYSCOMMAND SC_CLOSE -> hwnd={hwnd}")
             return
 
-        # 常见快捷键 → 直接命令消息（绕过系统按键状态依赖）
+        # 文本编辑快捷键 → 直接命令消息（绕过焦点依赖，更可靠）
         if combo == "ctrl+a":
             _send_message(hwnd, EM_SETSEL, 0, -1)
-            logger.debug(f"注入 EM_SETSEL (全选)")
+            logger.debug("注入 EM_SETSEL (全选)")
             return
         if combo == "ctrl+c":
             _send_message(hwnd, WM_COPY, 0, 0)
-            logger.debug(f"注入 WM_COPY (复制)")
+            logger.debug("注入 WM_COPY (复制)")
             return
         if combo == "ctrl+v":
             class_name = win32gui.GetClassName(hwnd)
@@ -444,53 +431,50 @@ class MessageInjector:
             return
         if combo == "ctrl+x":
             _send_message(hwnd, WM_CUT, 0, 0)
-            logger.debug(f"注入 WM_CUT (剪切)")
+            logger.debug("注入 WM_CUT (剪切)")
             return
 
-        # 通用情况：PostMessage/SendMessage 键盘模拟
+        # 所有其他组合键 → keybd_event（系统级注入，覆盖全部热键）
+        self._focus_window(hwnd)
         vks = [_key_to_vk(k) for k in keys]
-        for vk in vks:
-            if vk:
-                self._post_keydown(vk)
-                time.sleep(0.02)
-        for vk in reversed(vks):
-            if vk:
-                self._post_keyup(vk)
-                time.sleep(0.02)
+        valid = [vk for vk in vks if vk]
+        for vk in valid:
+            self._inject_keydown(vk)
+            time.sleep(0.02)
+        for vk in reversed(valid):
+            self._inject_keyup(vk)
+            time.sleep(0.02)
         logger.debug(f"注入组合键: {combo}")
 
     def key_down(self, key: str):
         vk = _key_to_vk(key)
         if vk:
-            self._post_keydown(vk)
+            self._focus_window(self._keyboard_hwnd)
+            self._inject_keydown(vk)
 
     def key_up(self, key: str):
         vk = _key_to_vk(key)
         if vk:
-            self._post_keyup(vk)
+            self._inject_keyup(vk)
 
-    def _post_key(self, vk: int):
-        """发送完整的按下+释放键消息"""
-        self._post_keydown(vk)
+    def _inject_key(self, vk: int):
+        """keybd_event 注入完整按键（按下+释放）"""
+        user32.keybd_event(vk, 0, 0, 0)
         time.sleep(0.02)
-        self._post_keyup(vk)
+        user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+
+    def _inject_keydown(self, vk: int):
+        """keybd_event 注入按键按下"""
+        user32.keybd_event(vk, 0, 0, 0)
+
+    def _inject_keyup(self, vk: int):
+        """keybd_event 注入按键释放"""
+        user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
 
     @property
     def _keyboard_hwnd(self):
         """键盘消息目标窗口：优先上次点击窗口，否则前台窗口"""
         return self._last_click_hwnd or win32gui.GetForegroundWindow()
-
-    def _post_keydown(self, vk: int):
-        hwnd = self._keyboard_hwnd
-        scan = _vk_to_scancode(vk)
-        lparam = (1 << 0) | (scan << 16)
-        _send_message(hwnd, WM_KEYDOWN, vk, lparam)
-
-    def _post_keyup(self, vk: int):
-        hwnd = self._keyboard_hwnd
-        scan = _vk_to_scancode(vk)
-        lparam = (1 << 0) | (1 << 30) | (1 << 31) | (scan << 16)
-        _send_message(hwnd, WM_KEYUP, vk, lparam)
 
 
 # ============ 键码映射 ============
