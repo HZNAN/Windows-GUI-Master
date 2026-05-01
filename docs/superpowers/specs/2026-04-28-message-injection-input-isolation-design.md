@@ -30,65 +30,62 @@ ExecutionEngine
             └── normal  (kept)          → pyautogui
 ```
 
-### Key Insight
+### Key Insight (and its limits)
 
-`PostMessage` bypasses the entire input subsystem (HID driver → input subsystem → cursor position update → message generation). Instead, it posts window messages directly to the target window's message queue. The system cursor is never touched.
+`PostMessage` bypasses the input subsystem and posts window messages directly to the target window's message queue without touching the system cursor. This works perfectly for some operations (scroll on Edit controls), but proved unreliable for others (clicks on UWP, system UI, non-client area, and many third-party apps).
 
-The kernel (`win32k.sys`) generates the same `WM_LBUTTONDOWN` / `WM_LBUTTONUP` messages for a real click as we do via `PostMessage`. At the message level, the target window cannot distinguish the source.
+**2026-05-01 update:** After discovering that PostMessage clicks fail on UWP/CoreWindow, Start menu, title bar buttons, and various third-party apps, we abandoned PostMessage for mouse clicks entirely. All mouse clicks now use `mouse_event` + hidden cursor (same technique as drag/scroll long ops). Keyboard input moved to `pyautogui` (battle-tested system-level injection).
 
-### New Module: `drivers/message_injector.py`
+### Module: `drivers/message_injector.py` (current state)
 
 ```
-class MessageInjector:
-    click(x, y, button)       → WindowFromPoint → ScreenToClient → PostMessage WM_LBUTTONDOWN/UP
-    double_click(x, y, button) → click × 2
-    scroll(x, y, amount)       → WindowFromPoint → PostMessage WM_MOUSEWHEEL
-    drag(x1, y1, x2, y2, dur) → WM_LBUTTONDOWN → SendMessage WM_MOUSEMOVE(s) → WM_LBUTTONUP
-    type_text(text)            → PostMessage WM_SETFOCUS + WM_KEYDOWN/UP (or clipboard paste for Chinese)
-    press_key(key)             → PostMessage WM_KEYDOWN/UP
-    hotkey(*keys)              → PostMessage WM_KEYDOWN/UP sequence
+class MessageInjector:               # 鼠标专用（键盘已迁移至 pyautogui）
+    click(x, y, button)       → mouse_event + 透明光标
+    double_click(x, y, btn)   → mouse_event × 2 + 透明光标
+    scroll(x, y, amount)      → Edit/Chrome: WM_MOUSEWHEEL PostMessage; 其他: mouse_event + 透明光标
+    drag(x1, y1, x2, y2)      → mouse_event + 透明光标
+    mouse_down/up(x, y, btn)  → mouse_event + 透明光标
 ```
 
-**Click flow:**
-1. `WindowFromPoint(screen_x, screen_y)` — find window under coordinates
-2. `ScreenToClient(hwnd, point)` — convert to client coordinates
-3. `PostMessage(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(cx, cy))`
-4. `PostMessage(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(cx, cy))`
+**Click flow (current):**
+1. `WindowFromPoint(screen_x, screen_y)` — find window (for click target tracking only)
+2. `SetSystemCursor` → transparent — hide real cursor
+3. `SetCursorPos(x, y)` → `mouse_event(down/up)` — physical click
+4. Restore cursor position + `SetSystemCursor` → normal arrow
 
-**Scroll flow:**
-1. Same coordinate translation as click
-2. `PostMessage(hwnd, WM_MOUSEWHEEL, MAKEWPARAM(0, delta * WHEEL_DELTA), MAKELPARAM(cx, cy))`
-
-**Drag flow:**
-1. `PostMessage(WM_LBUTTONDOWN, ...)` at start
-2. Multiple `SendMessage(WM_MOUSEMOVE, ...)` along path (SendMessage ensures ordering)
-3. `PostMessage(WM_LBUTTONUP, ...)` at end
+**Scroll flow (hybrid):**
+- Edit/RichEdit/Chrome: `PostMessage(WM_MOUSEWHEEL, ...)` — pure message, zero cursor impact
+- Other windows (Explorer/Feishu): `mouse_event(WHEEL)` + hidden cursor
 
 ### Modified Module: `drivers/input_control.py`
-
-Add `message_mode` parameter alongside existing `virtual_mode`:
 
 ```python
 class InputControl:
     def __init__(self, virtual_mode=False, message_mode=False):
         self.message_mode = message_mode
         if message_mode:
-            self._injector = MessageInjector()
+            self._injector = MessageInjector()  # 鼠标操作
 
     def click(self, x, y, button="left"):
         if self.message_mode:
-            self._injector.click(x, y, button)
+            self._injector.click(x, y, button)  # mouse_event
         elif self.virtual_mode:
-            self._virtual_click(x, y, button)
+            self._virtual_click(x, y, button)   # SetCursorPos + mouse_event
         else:
             pyautogui.click(x, y, button=button)
+
+    # 键盘统一走 pyautogui（无论哪个 mode）
+    def type_text(self, text):
+        if has_chinese(text):
+            clipboard_paste()  # IME 无法通过 keybd_event 生成
+        else:
+            pyautogui.write(text)
+
+    def press_key(self, key):    → pyautogui.press(key)
+    def hotkey(self, *keys):     → pyautogui.hotkey(*keys)
 ```
 
-Same three-way dispatch for: `click`, `double_click`, `scroll`, `drag`.
-
-Keyboard methods (`type_text`, `press_key`, `hotkey`, `key_down`, `key_up`) gain `message_mode` support for focused-target input.
-
-Old `_virtual_click` and `_virtual_scroll` are kept for backward compatibility via `virtual_mode`.
+Mouse dispatch is three-way (message/virtual/normal). Keyboard is single-path (pyautogui) regardless of mode.
 
 ### Modified Module: `core/execution_engine.py`
 
@@ -130,19 +127,17 @@ INPUT_MODE = os.getenv("INPUT_MODE", "message")  # "message" | "virtual" | "norm
 
 ## Actual Implementation: Hybrid Approach
 
-The initial design assumed all operations could be pure PostMessage/SendMessage. This proved incorrect for several fundamental reasons. The final implementation is a **hybrid**:
+The initial design assumed all operations could be pure PostMessage/SendMessage. This proved incorrect. The final implementation (2026-05-01) is:
 
-| Operation | Edit/RichEdit | Chrome/Browser | Explorer/Feishu/Other |
-|-----------|--------------|----------------|----------------------|
-| click | PostMessage WM_LBUTTONDOWN/UP | same | same |
-| double_click | PostMessage WM_LBUTTONDBLCLK | same | same |
-| scroll | PostMessage WM_MOUSEWHEEL | PostMessage WM_MOUSEWHEEL | mouse_event WHEEL (hidden cursor) |
-| drag | mouse_event (hidden cursor) | same | same |
-| mouse_down/up | mouse_event (hidden cursor) | same | same |
-| type_text (ASCII) | keybd_event (VkKeyScanW) | same | same |
-| type_text (Chinese) | Clipboard + WM_PASTE | keybd_event (VkKeyScanW) | keybd_event (VkKeyScanW) |
-| hotkey (all combos) | keybd_event | same | same |
-| hotkey ALT+F4 | WM_SYSCOMMAND SC_CLOSE | same | same |
+| Operation | Method | Notes |
+|-----------|--------|-------|
+| click / double_click | mouse_event + hidden cursor | All windows, zero cursor footprint |
+| scroll (Edit/Chrome) | PostMessage WM_MOUSEWHEEL | Only remaining PostMessage path |
+| scroll (other) | mouse_event WHEEL + hidden cursor | |
+| drag / mouse_down / mouse_up | mouse_event + hidden cursor | |
+| type_text (ASCII) | pyautogui.write | |
+| type_text (Chinese) | pyautogui.hotkey('ctrl','v') + clipboard | |
+| press_key / hotkey / key_down / key_up | pyautogui.press/hotkey/keyDown/keyUp | |
 
 ## Pitfalls Discovered
 
@@ -237,6 +232,18 @@ user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ct
 **根因：** ALT+F4 是系统级热键，Windows 窗口管理器在 `DefWindowProc` 之前拦截。`PostMessage(WM_KEYDOWN, VK_F4)` 不触发 `SC_CLOSE`。
 
 **解决：** `SendMessage(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)` 直接发送关闭命令。
+
+### 13. PostMessage 鼠标点击大面积失败 — 最终废弃 (2026-05-01)
+
+PostMessage `WM_LBUTTONDOWN/UP` 被以下类型窗口静默忽略：
+- **UWP/CoreWindow**: `Windows.UI.Core.CoreWindow` — 不使用传统 WndProc，通过 CoreDispatcher 处理输入
+- **系统 UI**: 开始菜单、搜索面板 — 同样 UWP 框架
+- **非客户区**: 标题栏按钮 — `WM_LBUTTONDOWN` 被当作客户区点击
+- **第三方应用**: 部分 Chromium/Electron 应用不处理外部 PostMessage 点击
+
+每个问题发现后都打了补丁（UWP 检测、非客户区检测、_focus_window 显式设置焦点），但问题不断出现。**最终决定：所有鼠标点击统一使用 mouse_event + 透明光标**。这牺牲了"纯消息零光标"的理想，但获得了通用可靠性。PostMessage 仅保留在 scroll 的 Edit/Chrome 分支（该场景确实有效且零光标对滚轮尤其重要）。
+
+键盘操作同样经历了 PostMessage → keybd_event → pyautogui 的演进，最终选择 pyautogui 作为键盘注入的统一方案。
 
 ## Fallback
 

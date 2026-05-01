@@ -44,6 +44,12 @@ python debug_coords.py                     # coordinate mapping diagnosis
 # Virtual cursor tests
 python test_virtual_cursor_120fps.py       # cursor animation at 120fps
 
+# Human-in-the-loop test
+python test_human_in_loop.py
+
+# Keyboard injection test
+python test_keyboard_inject.py
+
 # ACP integration tests (start server first, then client)
 python test_acp_server.py      # terminal 1
 python test_acp_client.py       # terminal 2
@@ -65,7 +71,7 @@ Two transport modes:
 - **Stdio**: `test_acp_stdio.py` → `StdioHandler` — used by `acpx` CLI (configured in `.acpxrc.json`)
 - **WebSocket**: `test_react_agent_acp.py` → `ReactAgentHandler(ACPHandler)` — for remote clients connecting to `ws://localhost:8765`
 
-**ReAct Agent** (`agents/react_agent.py`): LangChain-based loop with `ChatOpenAI` bound to tools. Multi-tool-call per turn, sliding history window of 3 turns, screenshot verification after each action.
+**ReAct Agent** (`agents/react_agent.py`): LangChain-based loop with `ChatOpenAI` bound to tools. Multi-tool-call per turn, sliding history window of 3 turns, screenshot verification after each action. System prompt from `prompts/system_prompt.txt` with Python format-string substitution for grid dimensions, step sizes, center point, and tick marks — resolved at runtime by `_build_system_prompt()`.
 
 **Tools** (`tools/`): LangChain `@tool`-decorated functions exposed to the LLM. `screen.py` captures screenshot with 1000×1000 coordinate grid overlay. `mouse.py`/`keyboard.py` accept grid coordinates. `agent.py` provides state tools (`finish`/`continue_steps`/`retry`) — every turn must end with one.
 
@@ -79,23 +85,19 @@ Two transport modes:
 | `virtual` | `InputControl(virtual_mode=True)` | SetCursorPos + mouse_event (save/restore) | Brief flicker |
 | `normal` | `InputControl()` | pyautogui | Full real cursor |
 
-**MessageInjector** (`drivers/message_injector.py`): Hybrid injection driver. Mouse: `PostMessage` for client-area clicks/double-clicks, `mouse_event` + hidden cursor for non-client area (title bar) and long ops (drag/scroll on non-Edit). Keyboard: all operations (`type_text`/`hotkey`/`press_key`/`key_down`/`key_up`) use `keybd_event` system-level injection with `GetGUIThreadInfo` cross-thread focus detection. Exception: Chinese text on Edit controls uses clipboard `WM_PASTE` (keybd_event can't generate IME sequences).
+**MessageInjector** (`drivers/message_injector.py`): Mouse-only injection driver. All clicks use `mouse_event` + hidden cursor (transparent `SetSystemCursor` replacement). PostMessage `WM_LBUTTONDOWN/UP` was abandoned after proving unreliable on UWP/CoreWindow, system UI, non-client area, and various third-party apps. Scroll is hybrid: `PostMessage WM_MOUSEWHEEL` for Edit/Chrome (zero cursor impact), `mouse_event` for others.
 
-**Message injection dispatch table:**
+**Input dispatch table:**
 
-| Operation | Method | Notes |
-|-----------|--------|-------|
-| click (client area) | PostMessage WM_LBUTTONDOWN/UP | |
-| click (non-client: title bar, close button) | mouse_event + hidden cursor | cx/cy < 0 triggers fallback |
-| double_click | PostMessage WM_LBUTTONDBLCLK (client) / mouse_event (non-client) | |
-| scroll (Edit/Chrome) | PostMessage WM_MOUSEWHEEL | |
-| scroll (other) | mouse_event WHEEL + hidden cursor | |
-| drag / mouse_down / mouse_up | mouse_event + hidden cursor | |
-| type_text (ASCII, all windows) | keybd_event via VkKeyScanW | system-level, works on any focused control |
-| type_text (Chinese, Edit) | Clipboard WM_PASTE | only case still using PostMessage |
-| type_text (Chinese, non-Edit) | keybd_event via VkKeyScanW | |
-| hotkey (all combos) | keybd_event | covers all system/app hotkeys |
-| hotkey ALT+F4 | WM_SYSCOMMAND SC_CLOSE | direct command, most reliable |
+| Operation | Method |
+|-----------|--------|
+| click / double_click | mouse_event + hidden cursor |
+| scroll (Edit/Chrome) | PostMessage WM_MOUSEWHEEL |
+| scroll (other) | mouse_event WHEEL + hidden cursor |
+| drag / mouse_down / mouse_up | mouse_event + hidden cursor |
+| type_text (ASCII) | pyautogui.write |
+| type_text (Chinese) | pyautogui.hotkey('ctrl', 'v') + clipboard |
+| press_key / hotkey / key_down / key_up | pyautogui |
 
 **Virtual Cursor** (`core/virtual_cursor.py` + `drivers/win32_overlay.py`): Animated cursor overlay using cubic Bezier curves. Rotates to face movement direction, with wind-up/wind-down rotation and idle wobble (12° sinusoidal at 0.83Hz). Rendered via Win32 layered window with `DrawIconEx`.
 
@@ -109,10 +111,10 @@ Screenshots are resized to `GRID_WIDTH` × `GRID_HEIGHT` (default 1000×1000, se
 - **History window**: Sliding window of 3 turns; `(check)` items need verification from next screenshot, `(success)`/`(fail)` track outcomes
 - **Chinese text input**: Edit controls use clipboard `WM_PASTE`; all other windows use `keybd_event` via `VkKeyScanW` (IME-free Unicode input)
 - **Cursor hiding**: Long operations replace the system arrow cursor with a transparent 32×32 monochrome cursor via `SetSystemCursor`, restored on completion with `try/finally`
-- **Keyboard injection**: All keyboard ops use `keybd_event` system-level injection. Focus obtained via `GetGUIThreadInfo` (cross-thread safe, unlike `GetFocus()` which only returns same-thread focus). `AttachThreadInput` + `SetFocus` only called when target doesn't already have focus
-- **Non-client area clicks**: Detected by `ScreenToClient` returning negative coordinates; fall back to `mouse_event` with hidden cursor for physical click on title bar buttons
+- **Mouse clicks**: All clicks use `mouse_event` + hidden cursor (transparent `SetSystemCursor` replacement + `SetCursorPos` + `mouse_event` + restore). PostMessage clicks were abandoned due to broad incompatibility (UWP, system UI, non-client area, etc.)
+- **Keyboard**: All ops via `pyautogui` (system-level `keybd_event`/`SendInput`). Clicks transfer focus naturally via `mouse_event` (no explicit `SetFocus` needed)
 - **Human-in-the-loop**: Agent can call `ask_human(question)` tool to pause and wait for human input. The tool blocks the agent thread via `threading.Event`; the main thread polls `AgentSession.is_waiting()` and returns `stopReason: "needs_human"` to the client. The next prompt to the same session is treated as the human's answer and injected via `inject_answer()`, waking the agent thread. The human response flows into history via the normal `current_turn_operations` → `_update_history` pipeline. Session state bridging is in `core/agent_service.py::AgentSession`
-- **session/update notifications**: During prompt processing, the agent pushes real-time events (tool_call, tool_result, agent_message_chunk) into `AgentSession.notification_queue`. The main thread drains this queue during polling and sends `session/update` JSON-RPC notifications (no `id` — fire-and-forget) to the client via stdout (stdio) or WebSocket. Notification types go in `params.sessionUpdate`, matching OpenClaw ACP spec
+- **session/update notifications**: During prompt processing, the agent pushes real-time events (tool_call, tool_result, agent_message_chunk) into `AgentSession.notification_queue`. The main thread drains this queue during polling and sends `session/update` JSON-RPC notifications (no `id` — fire-and-forget) to the client via stdout (stdio) or WebSocket. Notification types go in `params.sessionUpdate`, matching OpenClaw ACP spec. Format is built by `ACPProtocol.build_session_update()` in `core/acp/protocol.py` — `agent_message_chunk` nests `content: {type, text}`; `tool_call`/`tool_call_update` omit top-level `content`/`kind`, carrying data via `rawInput`/`rawOutput` in `extra`
 
 ## Configuration
 
@@ -134,7 +136,11 @@ All config in `config/settings.py`, loaded from `.env` via `python-dotenv`. Key 
 | `VIRTUAL_CURSOR_FPS` | 60 | Cursor animation frame rate |
 | `VIRTUAL_CURSOR_AMPLITUDE` | 15 | Bezier curve perturbation (pixels) |
 | `LLM_TEMPERATURE` | 0.1 | Model sampling temperature |
+| `LLM_MAX_TOKENS` | 1500 | Max tokens per LLM response |
+| `LLM_TOP_P` | 1.0 | Nucleus sampling parameter |
 
 The `.acpxrc.json` at project root configures the `acpx` CLI integration — registers agent `feishu-test` pointing to `test_acp_stdio.py` with `acp` protocol over stdio. This file is gitignored; copy from `.acpxrc.json.example`.
 
 Virtual cursor assets live in `cursor/` — each subdirectory holds an `arrow.png` and `hand.png`. Configure via `VIRTUAL_CURSOR_PATH` in `.env`.
+
+Design specs and implementation plans live in `docs/superpowers/` (specs and plans subdirectories). Key docs: ACP protocol design, virtual cursor effects, message injection architecture, win32 overlay pitfalls.
