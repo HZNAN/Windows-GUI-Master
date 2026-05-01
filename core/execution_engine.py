@@ -101,7 +101,7 @@ class ExecutionEngine:
                     logger.error(f"scroll 缺少坐标: ({x}, {y})")
                     return False
                 self._virtual_cursor.move_to(x, y)
-                time.sleep(0.05)  # 等待动画完成
+                time.sleep(0.05)
                 scroll_amount = amount if amount is not None else 3
                 self.input.scroll(x, y, scroll_amount)
                 logger.info(f"执行 scroll: ({x}, {y}), amount={scroll_amount}")
@@ -168,6 +168,51 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"执行异常: {e}")
             return False
+
+    def execute_scroll_with_detect(self, x: int, y: int, amount: int) -> bool | None:
+        """执行滚动并检测内容是否变化。
+
+        Returns:
+            True: 内容已变化（滚动有效）
+            False: 内容未变化（可能到达边界）
+            None: 滚动执行失败
+        """
+        import numpy as np
+        import pyautogui
+
+        region_size = 80
+        half = region_size // 2
+        region = (x - half, y - half, region_size, region_size)
+
+        try:
+            before = np.array(pyautogui.screenshot(region=region))
+        except Exception:
+            before = None
+
+        scroll_amount = amount if amount is not None else 3
+        self.input.scroll(x, y, scroll_amount)
+        time.sleep(0.05)
+
+        try:
+            after = np.array(pyautogui.screenshot(region=region))
+        except Exception:
+            after = None
+
+        if before is None or after is None:
+            return None
+
+        if before.shape != after.shape:
+            return True
+
+        total = before.size
+        same = int(np.sum(np.abs(before.astype(int) - after.astype(int)) < 5))
+        ratio = same / total
+        changed = ratio < 0.98
+        logger.info(
+            f"scroll detect: ({x},{y}) amount={scroll_amount} "
+            f"same_px={ratio:.1%} changed={changed}"
+        )
+        return changed
 
     def capture(self) -> tuple:
         """执行后截图，返回 (numpy数组, 路径)"""

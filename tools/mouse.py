@@ -111,11 +111,16 @@ def scroll(grid_x: int, grid_y: int, reason: str, step_type: str, amount: int = 
         操作结果描述
     """
     screen_x, screen_y = grid_to_screen(grid_x, grid_y)
-    ok = get_executor().execute(action="scroll", x=screen_x, y=screen_y, amount=amount)
-    if ok:
-        direction = "向上" if amount > 0 else "向下"
-        return f"成功在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 档"
-    return f"滚动失败"
+    changed = get_executor().execute_scroll_with_detect(
+        x=screen_x, y=screen_y, amount=amount
+    )
+    direction = "向上" if amount > 0 else "向下"
+    if changed is None:
+        return f"滚动失败"
+    if not changed:
+        return (f"在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 档"
+                f" —— 滚动无效，内容未变化（可能已到达边界，请停止向此方向滚动）")
+    return f"成功在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 档"
 
 
 @tool
