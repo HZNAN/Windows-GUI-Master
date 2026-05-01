@@ -23,7 +23,9 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 LLM_TOP_P = float(os.getenv("LLM_TOP_P", "1.0"))
 
 # ============ 截图 / 坐标网格配置 ============
-GRID_SIZE = int(os.getenv("GRID_SIZE", "1000"))  # 截图缩放的目标尺寸 (GRID_SIZE × GRID_SIZE)
+_gs = int(os.getenv("GRID_SIZE", "0"))
+GRID_WIDTH = int(os.getenv("GRID_WIDTH", str(_gs))) or 1000
+GRID_HEIGHT = int(os.getenv("GRID_HEIGHT", str(_gs))) or 1000
 
 # ============ ReactAgent 配置 ============
 AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))

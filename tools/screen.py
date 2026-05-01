@@ -13,7 +13,7 @@ def _overlay_coord_grid(img):
     """
     在截图上叠加坐标参考标记，缩放到 GRID_SIZE × GRID_SIZE。
     """
-    from config.settings import GRID_SIZE
+    from config.settings import GRID_WIDTH, GRID_HEIGHT
 
     if len(img.shape) == 3 and img.shape[2] == 4:
         output = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
@@ -22,14 +22,14 @@ def _overlay_coord_grid(img):
 
     orig_h, orig_w = output.shape[:2]
 
-    TARGET_W = TARGET_H = GRID_SIZE
-    output = cv2.resize(output, (TARGET_W, TARGET_H), interpolation=cv2.INTER_LINEAR)
-    h, w = TARGET_H, TARGET_W
+    output = cv2.resize(output, (GRID_WIDTH, GRID_HEIGHT), interpolation=cv2.INTER_LINEAR)
+    h, w = GRID_HEIGHT, GRID_WIDTH
 
-    # 网格线和刻度间距（与 GRID_SIZE 成比例）
-    grid_step = max(GRID_SIZE // 5, 50)
-    tick_step = max(GRID_SIZE // 10, 25)
-    margin = max(GRID_SIZE // 20, 25)
+    # 网格线和刻度间距（与尺寸成比例）
+    grid_size = max(GRID_WIDTH, GRID_HEIGHT)
+    grid_step = max(grid_size // 5, 50)
+    tick_step = max(grid_size // 10, 25)
+    margin = max(grid_size // 20, 25)
 
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -105,11 +105,11 @@ def screenshot() -> dict:
     with open(str(grid_path), "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    from config.settings import GRID_SIZE
+    from config.settings import GRID_WIDTH, GRID_HEIGHT
     return {
         "image": f"data:image/png;base64,{img_b64}",
-        "grid_width": GRID_SIZE,
-        "grid_height": GRID_SIZE,
+        "grid_width": GRID_WIDTH,
+        "grid_height": GRID_HEIGHT,
         "orig_width": orig_w,
         "orig_height": orig_h,
     }

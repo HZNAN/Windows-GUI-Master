@@ -99,7 +99,7 @@ Two transport modes:
 
 ## Coordinate System
 
-Screenshots are resized to `GRID_SIZE` × `GRID_SIZE` (default 1000×1000) for API calls. Tools receive `grid_x`/`grid_y` in this coordinate space. `tools/_shared.py::grid_to_screen()` converts back to actual screen coordinates.
+Screenshots are resized to `GRID_WIDTH` × `GRID_HEIGHT` (default 1000×1000, settable via `GRID_SIZE` shorthand) for API calls. Tools receive `grid_x`/`grid_y` in this coordinate space. `tools/_shared.py::grid_to_screen()` converts back to actual screen coordinates.
 
 ## Key Patterns
 
@@ -120,7 +120,7 @@ All config in `config/settings.py`, loaded from `.env` via `python-dotenv`. Key 
 | `LLM_API_KEY` | (required) | OpenAI 兼容 API Key（火山/小米/智谱/OpenAI 等） |
 | `LLM_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | API 地址（OpenAI 兼容格式） |
 | `LLM_MODEL` | `doubao-seed-2-0-lite-260215` | 模型名称（vision-capable） |
-| `GRID_SIZE` | 1000 | Screenshot resize target (GRID_SIZE × GRID_SIZE) |
+| `GRID_WIDTH` / `GRID_HEIGHT` / `GRID_SIZE` | 1000 | Screenshot resize (set `GRID_SIZE` for square, or each axis separately) |
 | `AGENT_MAX_STEPS` | 15 | Max ReAct loop iterations |
 | `AGENT_HISTORY_WINDOW` | 3 | Turns kept in context |
 | `AGENT_TURN_DELAY` | 0.3 | Pause (seconds) after tools finish before next turn screenshot |
