@@ -72,7 +72,7 @@ class MessageInjector:
         """恢复系统箭头光标"""
         if getattr(self, '_backup_arrow', 0):
             ctypes.windll.user32.SetSystemCursor(self._backup_arrow, OCR_NORMAL)
-            ctypes.windll.user32.DestroyCursor(self._backup_arrow)
+            # SetSystemCursor 后系统拥有该句柄，不能 DestroyCursor
             self._backup_arrow = 0
             logger.debug("系统箭头光标已恢复")
 

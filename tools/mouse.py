@@ -26,8 +26,8 @@ def click(grid_x: int, grid_y: int, reason: str, step_type: str) -> str:
     screen_x, screen_y = grid_to_screen(grid_x, grid_y)
     ok = get_executor().execute(action="click", x=screen_x, y=screen_y)
     if ok:
-        return f"成功点击坐标 ({screen_x}, {screen_y}) [网格坐标: ({grid_x}, {grid_y})]"
-    return f"点击坐标 ({screen_x}, {screen_y}) 失败"
+        return f"成功点击网格坐标 ({grid_x}, {grid_y})"
+    return f"点击网格坐标 ({grid_x}, {grid_y}) 失败"
 
 
 @tool
@@ -47,8 +47,8 @@ def move_mouse(grid_x: int, grid_y: int, reason: str, step_type: str) -> str:
     screen_x, screen_y = grid_to_screen(grid_x, grid_y)
     ok = get_executor().execute(action="move", x=screen_x, y=screen_y)
     if ok:
-        return f"成功移动鼠标到 ({screen_x}, {screen_y}) [网格坐标: ({grid_x}, {grid_y})]"
-    return f"移动鼠标到 ({screen_x}, {screen_y}) 失败"
+        return f"成功移动鼠标到网格坐标 ({grid_x}, {grid_y})"
+    return f"移动鼠标到网格坐标 ({grid_x}, {grid_y}) 失败"
 
 
 @tool
@@ -68,8 +68,8 @@ def double_click(grid_x: int, grid_y: int, reason: str, step_type: str) -> str:
     screen_x, screen_y = grid_to_screen(grid_x, grid_y)
     ok = get_executor().execute(action="double_click", x=screen_x, y=screen_y)
     if ok:
-        return f"成功双击坐标 ({screen_x}, {screen_y}) [网格坐标: ({grid_x}, {grid_y})]"
-    return f"双击坐标 ({screen_x}, {screen_y}) 失败"
+        return f"成功双击网格坐标 ({grid_x}, {grid_y})"
+    return f"双击网格坐标 ({grid_x}, {grid_y}) 失败"
 
 
 @tool
@@ -89,8 +89,8 @@ def right_click(grid_x: int, grid_y: int, reason: str, step_type: str) -> str:
     screen_x, screen_y = grid_to_screen(grid_x, grid_y)
     ok = get_executor().execute(action="right_click", x=screen_x, y=screen_y)
     if ok:
-        return f"成功右键点击坐标 ({screen_x}, {screen_y}) [网格坐标: ({grid_x}, {grid_y})]"
-    return f"右键点击坐标 ({screen_x}, {screen_y}) 失败"
+        return f"成功右键点击网格坐标 ({grid_x}, {grid_y})"
+    return f"右键点击网格坐标 ({grid_x}, {grid_y}) 失败"
 
 
 @tool
@@ -115,11 +115,11 @@ def scroll(grid_x: int, grid_y: int, reason: str, step_type: str, amount: int = 
     )
     direction = "向上" if amount > 0 else "向下"
     if changed is None:
-        return f"滚动失败"
+        return f"滚动失败（网格坐标 {grid_x},{grid_y}）"
     if not changed:
-        return (f"在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 档"
+        return (f"在网格 ({grid_x},{grid_y}) 滚动 {direction} {abs(amount)} 档"
                 f" —— 滚动无效，内容未变化（可能已到达边界，请停止向此方向滚动）")
-    return f"成功在 ({screen_x}, {screen_y}) 滚动 {direction} {abs(amount)} 档"
+    return f"成功在网格 ({grid_x},{grid_y}) 滚动 {direction} {abs(amount)} 档"
 
 
 @tool
@@ -147,8 +147,8 @@ def drag(grid_x1: int, grid_y1: int, grid_x2: int, grid_y2: int,
         x2=screen_x2, y2=screen_y2, duration=duration
     )
     if ok:
-        return f"成功拖拽 ({screen_x1}, {screen_y1}) -> ({screen_x2}, {screen_y2})"
-    return f"拖拽失败"
+        return f"成功拖拽网格 ({grid_x1},{grid_y1}) → ({grid_x2},{grid_y2})"
+    return f"拖拽网格 ({grid_x1},{grid_y1}) → ({grid_x2},{grid_y2}) 失败"
 
 
 # 将工具描述中的硬编码 1000x1000 替换为实际配置值
