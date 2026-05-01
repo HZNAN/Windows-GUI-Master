@@ -186,6 +186,10 @@ class MessageInjector:
             time.sleep(0.02)
             self._post(hwnd, WM_LBUTTONUP, 0, lparam)
 
+        # PostMessage 点击不会转移键盘焦点 — 必须显式 SetFocus
+        # 否则后续 pyautogui 键盘输入会发到错误的窗口
+        self._focus_window(hwnd)
+
         logger.debug(f"注入点击: ({x},{y}) -> hwnd={hwnd}, client=({cx},{cy}), btn={button}")
 
     def _click_via_mouse_event(self, x: int, y: int, button: str = "left"):
@@ -240,6 +244,7 @@ class MessageInjector:
         time.sleep(0.02)
         self._post(hwnd, WM_LBUTTONUP, 0, lparam)
 
+        self._focus_window(hwnd)
         logger.debug(f"注入双击: ({x},{y}), btn={button}")
 
     def scroll(self, x: int, y: int, amount: int = 3):
