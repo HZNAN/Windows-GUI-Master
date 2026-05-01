@@ -30,11 +30,15 @@ WM_MOUSEMOVE = 0x0200
 WM_MOUSEWHEEL = 0x020A
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
 WM_CHAR = 0x0102
+WM_SYSCOMMAND = 0x0112
 WM_SETFOCUS = 0x0007
 WM_PASTE = 0x0302
 WM_COPY = 0x0301
 WM_CUT = 0x0300
+SC_CLOSE = 0xF060
 EM_SETSEL = 0x00B1
 EM_CHARFROMPOS = 0x00D7
 WHEEL_DELTA = 120
@@ -151,9 +155,16 @@ class MessageInjector:
             logger.debug("系统箭头光标已恢复")
 
     def click(self, x: int, y: int, button: str = "left"):
-        hwnd, cx, cy = self._require_window(x, y)
+        hwnd, cx, cy = self._find_window_and_pos(x, y)
         if hwnd is None:
+            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
             return
+
+        # 非客户区（cx 或 cy 为负，如标题栏按钮）→ mouse_event 物理点击
+        if cx < 0 or cy < 0:
+            self._click_via_mouse_event(x, y, button)
+            return
+
         self._last_click_hwnd = hwnd
         lparam = _make_lparam(cx, cy)
 
@@ -172,15 +183,44 @@ class MessageInjector:
 
         logger.debug(f"注入点击: ({x},{y}) -> hwnd={hwnd}, client=({cx},{cy}), btn={button}")
 
+    def _click_via_mouse_event(self, x: int, y: int, button: str = "left"):
+        """非客户区点击：必须用真实鼠标事件（PostMessage 不处理标题栏/边框）"""
+        saved = win32api.GetCursorPos()
+        self._hide_real_cursor()
+        try:
+            win32api.SetCursorPos((x, y))
+            time.sleep(0.01)
+            btn_map = {
+                "right": (win32con.MOUSEEVENTF_RIGHTDOWN, win32con.MOUSEEVENTF_RIGHTUP),
+                "middle": (win32con.MOUSEEVENTF_MIDDLEDOWN, win32con.MOUSEEVENTF_MIDDLEUP),
+            }
+            down, up = btn_map.get(button, (win32con.MOUSEEVENTF_LEFTDOWN, win32con.MOUSEEVENTF_LEFTUP))
+            win32api.mouse_event(down, 0, 0, 0, 0)
+            time.sleep(0.02)
+            win32api.mouse_event(up, 0, 0, 0, 0)
+            logger.debug(f"mouse_event 点击 (非客户区): ({x},{y}), btn={button}")
+        finally:
+            win32api.SetCursorPos(saved)
+            self._show_real_cursor()
+
     @staticmethod
     def _post(hwnd, msg, wparam, lparam):
         _send_message(hwnd, msg, wparam, lparam)
 
     def double_click(self, x: int, y: int, button: str = "left"):
         """双击：第一次 click，第二次用 WM_LBUTTONDBLCLK 触发双击行为"""
-        hwnd, cx, cy = self._require_window(x, y)
+        hwnd, cx, cy = self._find_window_and_pos(x, y)
         if hwnd is None:
+            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
             return
+
+        # 非客户区 → mouse_event 物理点击
+        if cx < 0 or cy < 0:
+            self._click_via_mouse_event(x, y, button)
+            time.sleep(0.05)
+            self._click_via_mouse_event(x, y, button)
+            return
+
         self._last_click_hwnd = hwnd
         lparam = _make_lparam(cx, cy)
 
@@ -374,6 +414,14 @@ class MessageInjector:
         """注入组合键。常见快捷键用直接命令消息，通用情况用 keyboard 模拟"""
         combo = '+'.join(k.lower().strip() for k in keys)
         hwnd = self._keyboard_hwnd
+
+        # ALT+F4 → 直接发 WM_SYSCOMMAND(SC_CLOSE) 关闭窗口
+        if combo == "alt+f4":
+            hwnd = self._keyboard_hwnd
+            if hwnd:
+                _send_message(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
+                logger.debug(f"注入 WM_SYSCOMMAND SC_CLOSE -> hwnd={hwnd}")
+            return
 
         # 常见快捷键 → 直接命令消息（绕过系统按键状态依赖）
         if combo == "ctrl+a":
