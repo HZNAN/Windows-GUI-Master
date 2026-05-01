@@ -15,10 +15,11 @@ def get_executor() -> ExecutionEngine:
 
 
 def grid_to_screen(grid_x: int, grid_y: int) -> tuple[int, int]:
-    """将 1000x1000 网格坐标换算回原屏幕坐标"""
+    """将网格坐标换算回原屏幕坐标"""
+    from config.settings import GRID_SIZE
     info = _screen_info_cache[0]
     if info is None:
         info = {"orig_w": 1920, "orig_h": 1080}
-    scale_x = info["orig_w"] / 1000
-    scale_y = info["orig_h"] / 1000
+    scale_x = info["orig_w"] / GRID_SIZE
+    scale_y = info["orig_h"] / GRID_SIZE
     return int(grid_x * scale_x), int(grid_y * scale_y)

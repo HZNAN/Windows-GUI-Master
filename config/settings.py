@@ -22,6 +22,9 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 LLM_TOP_P = float(os.getenv("LLM_TOP_P", "1.0"))
 
+# ============ 截图 / 坐标网格配置 ============
+GRID_SIZE = int(os.getenv("GRID_SIZE", "1000"))  # 截图缩放的目标尺寸 (GRID_SIZE × GRID_SIZE)
+
 # ============ ReactAgent 配置 ============
 AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))
 AGENT_HISTORY_WINDOW = int(os.getenv("AGENT_HISTORY_WINDOW", "3"))
