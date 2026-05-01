@@ -50,6 +50,9 @@ python test_human_in_loop.py
 # Keyboard injection test
 python test_keyboard_inject.py
 
+# Scroll injection test
+python test_scroll.py
+
 # ACP integration tests (start server first, then client)
 python test_acp_server.py      # terminal 1
 python test_acp_client.py       # terminal 2
