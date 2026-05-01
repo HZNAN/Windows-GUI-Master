@@ -41,6 +41,20 @@ MK_MBUTTON = 0x0010
 
 user32 = ctypes.windll.user32
 
+
+class _GUITHREADINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("hwndActive", ctypes.c_void_p),
+        ("hwndFocus", ctypes.c_void_p),
+        ("hwndCapture", ctypes.c_void_p),
+        ("hwndMenuOwner", ctypes.c_void_p),
+        ("hwndMoveSize", ctypes.c_void_p),
+        ("hwndCaret", ctypes.c_void_p),
+        ("rcCaret", ctypes.c_long * 4),
+    ]
+
 # 64-bit Windows 上必须设置 argtypes，否则 WPARAM/LPARAM 会被截断为 32-bit
 user32.PostMessageW.argtypes = [
     ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong,
@@ -59,6 +73,10 @@ user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ct
 user32.keybd_event.restype = None
 user32.VkKeyScanW.argtypes = [ctypes.c_wchar]
 user32.VkKeyScanW.restype = ctypes.c_short
+user32.GetGUIThreadInfo.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+user32.GetGUIThreadInfo.restype = ctypes.c_int
+user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+user32.GetWindowThreadProcessId.restype = ctypes.c_uint
 
 SMTO_NORMAL = 0x0000
 SENDMSG_TIMEOUT = 100  # ms
@@ -329,20 +347,40 @@ class MessageInjector:
             self._show_real_cursor()
 
     def _focus_window(self, hwnd: int):
-        """将键盘焦点强制设到目标窗口。
-        PostMessage 点击不会自动转移焦点，需要 AttachThreadInput + SetFocus。"""
+        """将键盘焦点强制设到目标窗口（仅当目标尚未获得焦点时）。
+
+        AttachThreadInput + SetFocus 在目标已有焦点时会干扰输入管道，
+        导致 keybd_event 注入的按键被丢弃。只在必要时使用。
+        """
         if not hwnd:
             return
+        current_focus = self._get_thread_focus()
+        if current_focus and current_focus == hwnd:
+            logger.debug(f"焦点已在目标控件 hwnd={hwnd}，跳过 SetFocus")
+            return
         our_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-        target_tid = ctypes.windll.user32.GetWindowThreadProcessId(hwnd, 0)
+        target_tid = user32.GetWindowThreadProcessId(hwnd, 0)
         attached = False
         if our_tid != target_tid:
-            attached = bool(ctypes.windll.user32.AttachThreadInput(our_tid, target_tid, True))
-        ctypes.windll.user32.SetFocus(hwnd)
+            attached = bool(user32.AttachThreadInput(our_tid, target_tid, True))
+        user32.SetFocus(hwnd)
         time.sleep(0.05)
         if attached:
-            ctypes.windll.user32.AttachThreadInput(our_tid, target_tid, False)
+            user32.AttachThreadInput(our_tid, target_tid, False)
         logger.debug(f"SetFocus hwnd={hwnd}, attached={attached}")
+
+    @staticmethod
+    def _get_thread_focus():
+        """获取前台线程的焦点控件（跨线程安全）"""
+        fg = win32gui.GetForegroundWindow()
+        if not fg:
+            return None
+        tid = user32.GetWindowThreadProcessId(fg, 0)
+        gti = _GUITHREADINFO()
+        gti.cbSize = ctypes.sizeof(gti)
+        if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
+            return gti.hwndFocus
+        return None
 
     def type_text(self, text: str):
         """注入文本。统一使用 keybd_event 系统级键盘注入。
@@ -378,7 +416,7 @@ class MessageInjector:
         """通过 keybd_event 逐字符输入文本（系统级，适用于所有窗口）"""
         VK_SHIFT = 0x10
         for ch in text:
-            code = ctypes.windll.user32.VkKeyScanW(ord(ch))
+            code = user32.VkKeyScanW(ch)  # c_wchar argtype，传字符本身不是 ord()
             if code == -1:
                 continue
             vk = code & 0xFF
@@ -450,8 +488,8 @@ class MessageInjector:
 
     @property
     def _keyboard_hwnd(self):
-        """键盘消息目标窗口：优先当前焦点控件，其次上次点击窗口，最后前台窗口"""
-        focus = win32gui.GetFocus()
+        """键盘消息目标窗口：优先前台线程的焦点控件，其次上次点击窗口，最后前台窗口。"""
+        focus = self._get_thread_focus()
         if focus:
             return focus
         return self._last_click_hwnd or win32gui.GetForegroundWindow()
