@@ -15,8 +15,7 @@ SCREENSHOTS_DIR.mkdir(exist_ok=True)
 
 # ============ LLM 模型配置（OpenAI 兼容 API，支持任意厂商） ============
 # 新变量名（通用）优先，旧 ARK_ 变量名作为向后兼容
-_FALLBACK_KEY = "ark-692bf554-d0fc-4b45-bde6-ba0157d4de54-b4a75"
-LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("ARK_API_KEY") or _FALLBACK_KEY
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("ARK_API_KEY") or ""
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("ARK_API_URL") or "https://ark.cn-beijing.volces.com/api/v3"
 LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("ARK_VISION_MODEL") or "doubao-seed-2-0-lite-260215"
 
