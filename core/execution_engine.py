@@ -53,8 +53,11 @@ class ExecutionEngine:
                 if x is None or y is None:
                     logger.error(f"click 缺少坐标: ({x}, {y})")
                     return False
-                self._virtual_cursor.move_to(x, y)
-                time.sleep(0.1)  # 等待动画完成
+                try:
+                    self._virtual_cursor.move_to(x, y)
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.warning(f"虚拟光标动画失败(降级继续): {e}")
                 self.input.click(x, y, button=button)
                 logger.info(f"执行 click: ({x}, {y}), button={button}")
                 return True
@@ -63,7 +66,10 @@ class ExecutionEngine:
                 if x is None or y is None:
                     logger.error(f"move 缺少坐标: ({x}, {y})")
                     return False
-                self._virtual_cursor.move_to(x, y)
+                try:
+                    self._virtual_cursor.move_to(x, y)
+                except Exception as e:
+                    logger.warning(f"虚拟光标动画失败(降级继续): {e}")
                 logger.info(f"执行 move: ({x}, {y})")
                 return True
 
