@@ -103,9 +103,8 @@ def scroll(grid_x: int, grid_y: int, reason: str, step_type: str, amount: int = 
         grid_y: 1000x1000 网格坐标系中的 Y 坐标（鼠标位置）
         reason: 简短描述本轮操作（过去式）
         step_type: "continue" 或 "retry"
-        amount: 滚动档位。正数↑向上滚动（看到上方内容），负数↓向下滚动（看到下方内容）。
+        amount: 滚动档位。正数向上滚动，负数向下滚动。
                 1~3 ≈ 几行, 5 ≈ 半屏(默认), 10 ≈ 一整屏。
-                例: 当前显示20:00~23:30，要找15:00 → 用正数(向上滚到更早的时间)。
 
     返回:
         操作结果描述
