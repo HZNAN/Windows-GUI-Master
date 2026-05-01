@@ -61,6 +61,8 @@ user32.SendMessageW.argtypes = [
 user32.SendMessageW.restype = ctypes.c_longlong
 user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ctypes.c_ulonglong]
 user32.keybd_event.restype = None
+user32.VkKeyScanW.argtypes = [ctypes.c_wchar]
+user32.VkKeyScanW.restype = ctypes.c_short
 
 SMTO_NORMAL = 0x0000
 SENDMSG_TIMEOUT = 100  # ms
@@ -362,8 +364,8 @@ class MessageInjector:
 
     def type_text(self, text: str):
         """注入文本。
-        Edit 控件中文用剪贴板粘贴（WM_CHAR 对非 ASCII 不可靠），
-        其他应用（浏览器/飞书等）所有文字统一用 WM_CHAR 逐字发送。"""
+        Edit/RichEdit 控件：ASCII 用 WM_CHAR，中文用剪贴板粘贴。
+        其他窗口（浏览器/系统对话框/飞书等）：keybd_event 系统级键盘注入。"""
         hwnd = self._keyboard_hwnd
         if not hwnd:
             logger.warning("type_text: 无目标窗口")
@@ -372,24 +374,49 @@ class MessageInjector:
         class_name = win32gui.GetClassName(hwnd)
         is_edit = class_name == "Edit" or class_name.startswith("RichEdit")
 
-        if is_edit and any(ord(c) > 127 for c in text):
-            import pyperclip
-            old_clipboard = pyperclip.paste()
-            pyperclip.copy(text)
-            time.sleep(0.1)
-            _send_message(hwnd, WM_PASTE, 0, 0)
-            time.sleep(0.1)
-            try:
-                pyperclip.copy(old_clipboard)
-            except Exception:
-                pass
-            logger.debug(f"中文 WM_PASTE -> class={class_name}")
+        if is_edit:
+            if any(ord(c) > 127 for c in text):
+                import pyperclip
+                old_clipboard = pyperclip.paste()
+                pyperclip.copy(text)
+                time.sleep(0.1)
+                _send_message(hwnd, WM_PASTE, 0, 0)
+                time.sleep(0.1)
+                try:
+                    pyperclip.copy(old_clipboard)
+                except Exception:
+                    pass
+                logger.debug(f"中文 WM_PASTE -> class={class_name}")
+            else:
+                for ch in text:
+                    _send_message(hwnd, WM_CHAR, ord(ch), 0)
+                    time.sleep(0.01)
+                logger.debug(f"WM_CHAR ({len(text)} chars) -> class={class_name}")
         else:
-            for ch in text:
-                _send_message(hwnd, WM_CHAR, ord(ch), 0)
-                time.sleep(0.01)
-            logger.debug(f"WM_CHAR ({len(text)} chars) -> class={class_name}")
+            self._focus_window(hwnd)
+            self._type_via_keybd(text)
+            logger.debug(f"keybd_event ({len(text)} chars) -> class={class_name}")
+
         logger.debug(f"注入文本: {text[:20]}{'...' if len(text) > 20 else ''}")
+
+    def _type_via_keybd(self, text: str):
+        """通过 keybd_event 逐字符输入文本（系统级，适用于所有窗口）"""
+        VK_SHIFT = 0x10
+        for ch in text:
+            code = ctypes.windll.user32.VkKeyScanW(ord(ch))
+            if code == -1:
+                continue
+            vk = code & 0xFF
+            need_shift = (code >> 8) & 1
+            if need_shift:
+                user32.keybd_event(VK_SHIFT, 0, 0, 0)
+                time.sleep(0.01)
+            user32.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.01)
+            user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+            if need_shift:
+                user32.keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0)
+            time.sleep(0.01)
 
     def press_key(self, key: str):
         vk = _key_to_vk(key)
@@ -473,7 +500,10 @@ class MessageInjector:
 
     @property
     def _keyboard_hwnd(self):
-        """键盘消息目标窗口：优先上次点击窗口，否则前台窗口"""
+        """键盘消息目标窗口：优先当前焦点控件，其次上次点击窗口，最后前台窗口"""
+        focus = win32gui.GetFocus()
+        if focus:
+            return focus
         return self._last_click_hwnd or win32gui.GetForegroundWindow()
 
 
