@@ -8,6 +8,7 @@ sys.path.insert(0, ".")
 import win32api
 import win32gui
 from drivers.message_injector import MessageInjector
+from tools._shared import grid_to_screen
 
 
 def check_focus():
@@ -63,7 +64,36 @@ def main():
     print(f"{'='*55}")
 
 
+    # ===== 网格坐标诊断 =====
+    print(f"\n{'='*55}")
+    print("  网格坐标诊断")
+    print(f"{'='*55}")
+    print("  输入网格坐标来测试滚动（agent 用的坐标）")
+    print("  格式: grid_x grid_y amount")
+    print("  例: 340 450 10  (回车测试，空行退出)")
+    print()
+
+    while True:
+        try:
+            line = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if not line:
+            break
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        gx = int(parts[0])
+        gy = int(parts[1])
+        amt = int(parts[2]) if len(parts) > 2 else 5
+        sx, sy = grid_to_screen(gx, gy)
+        print(f"  网格({gx},{gy}) → 屏幕({sx},{sy}), amount={amt}")
+        injector.scroll(sx, sy, amt)
+        time.sleep(0.2)
+
+
 if __name__ == "__main__":
     print("3s to prepare — place mouse over scrollable area (browser/feishu/notepad)")
     time.sleep(3)
     main()
+
