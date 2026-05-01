@@ -19,41 +19,10 @@ import win32gui
 OCR_NORMAL = 32512  # 标准箭头光标 ID
 IMAGE_CURSOR = 2
 
-WM_LBUTTONDOWN = 0x0201
-WM_LBUTTONUP = 0x0202
-WM_LBUTTONDBLCLK = 0x0203
-WM_RBUTTONDOWN = 0x0204
-WM_RBUTTONUP = 0x0205
-WM_MBUTTONDOWN = 0x0207
-WM_MBUTTONUP = 0x0208
-WM_MOUSEMOVE = 0x0200
 WM_MOUSEWHEEL = 0x020A
-WM_CHAR = 0x0102
-WM_SYSCOMMAND = 0x0112
-WM_SETFOCUS = 0x0007
-WM_PASTE = 0x0302
-SC_CLOSE = 0xF060
-KEYEVENTF_KEYUP = 0x0002
 WHEEL_DELTA = 120
-MK_LBUTTON = 0x0001
-MK_RBUTTON = 0x0002
-MK_MBUTTON = 0x0010
 
 user32 = ctypes.windll.user32
-
-
-class _GUITHREADINFO(ctypes.Structure):
-    _fields_ = [
-        ("cbSize", ctypes.c_uint),
-        ("flags", ctypes.c_uint),
-        ("hwndActive", ctypes.c_void_p),
-        ("hwndFocus", ctypes.c_void_p),
-        ("hwndCapture", ctypes.c_void_p),
-        ("hwndMenuOwner", ctypes.c_void_p),
-        ("hwndMoveSize", ctypes.c_void_p),
-        ("hwndCaret", ctypes.c_void_p),
-        ("rcCaret", ctypes.c_long * 4),
-    ]
 
 # 64-bit Windows 上必须设置 argtypes，否则 WPARAM/LPARAM 会被截断为 32-bit
 user32.PostMessageW.argtypes = [
@@ -69,14 +38,6 @@ user32.SendMessageW.argtypes = [
     ctypes.c_void_p, ctypes.c_uint, ctypes.c_ulonglong, ctypes.c_longlong,
 ]
 user32.SendMessageW.restype = ctypes.c_longlong
-user32.keybd_event.argtypes = [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ctypes.c_ulonglong]
-user32.keybd_event.restype = None
-user32.VkKeyScanW.argtypes = [ctypes.c_wchar]
-user32.VkKeyScanW.restype = ctypes.c_short
-user32.GetGUIThreadInfo.argtypes = [ctypes.c_uint, ctypes.c_void_p]
-user32.GetGUIThreadInfo.restype = ctypes.c_int
-user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-user32.GetWindowThreadProcessId.restype = ctypes.c_uint
 
 SMTO_NORMAL = 0x0000
 SENDMSG_TIMEOUT = 100  # ms
@@ -117,14 +78,6 @@ class MessageInjector:
         cx, cy = win32gui.ScreenToClient(hwnd, (x, y))
         return hwnd, cx, cy
 
-    def _require_window(self, x: int, y: int):
-        """获取窗口句柄和客户坐标，hwnd 为 None 时记录警告"""
-        hwnd, cx, cy = self._find_window_and_pos(x, y)
-        if hwnd is None:
-            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
-            return None, 0, 0
-        return hwnd, cx, cy
-
     @staticmethod
     def _create_invisible_cursor():
         """创建完全透明的 32×32 单色光标。
@@ -160,46 +113,18 @@ class MessageInjector:
             logger.debug("系统箭头光标已恢复")
 
     def click(self, x: int, y: int, button: str = "left"):
-        hwnd, cx, cy = self._find_window_and_pos(x, y)
-        if hwnd is None:
-            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
-            return
+        """鼠标点击：mouse_event + 透明光标，适用于所有窗口类型。
 
-        # UWP/Modern 窗口不响应 PostMessage → 物理点击
-        class_name = win32gui.GetClassName(hwnd)
-        if self._is_uwp_window(class_name):
-            self._click_via_mouse_event(x, y, button)
-            return
-
-        # 非客户区（cx 或 cy 为负，如标题栏按钮）→ mouse_event 物理点击
-        if cx < 0 or cy < 0:
-            self._click_via_mouse_event(x, y, button)
-            return
-
+        PostMessage 点击对 UWP/系统 UI/非客户区/部分应用无效，
+        统一使用 mouse_event 物理点击避免兼容性问题。
+        """
+        hwnd, _, _ = self._find_window_and_pos(x, y)
         self._last_click_hwnd = hwnd
-        lparam = _make_lparam(cx, cy)
+        self._mouse_click(x, y, button)
+        logger.debug(f"注入点击: ({x},{y}), btn={button}")
 
-        if button == "right":
-            self._post(hwnd, WM_RBUTTONDOWN, MK_RBUTTON, lparam)
-            time.sleep(0.02)
-            self._post(hwnd, WM_RBUTTONUP, 0, lparam)
-        elif button == "middle":
-            self._post(hwnd, WM_MBUTTONDOWN, MK_MBUTTON, lparam)
-            time.sleep(0.02)
-            self._post(hwnd, WM_MBUTTONUP, 0, lparam)
-        else:
-            self._post(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-            time.sleep(0.02)
-            self._post(hwnd, WM_LBUTTONUP, 0, lparam)
-
-        # PostMessage 点击不会转移键盘焦点 — 必须显式 SetFocus
-        # 否则后续 pyautogui 键盘输入会发到错误的窗口
-        self._focus_window(hwnd)
-
-        logger.debug(f"注入点击: ({x},{y}) -> hwnd={hwnd}, client=({cx},{cy}), btn={button}")
-
-    def _click_via_mouse_event(self, x: int, y: int, button: str = "left"):
-        """非客户区点击：必须用真实鼠标事件（PostMessage 不处理标题栏/边框）"""
+    def _mouse_click(self, x: int, y: int, button: str = "left"):
+        """mouse_event + 透明光标物理点击（隐藏→移动→点击→恢复）"""
         saved = win32api.GetCursorPos()
         self._hide_real_cursor()
         try:
@@ -213,7 +138,6 @@ class MessageInjector:
             win32api.mouse_event(down, 0, 0, 0, 0)
             time.sleep(0.02)
             win32api.mouse_event(up, 0, 0, 0, 0)
-            logger.debug(f"mouse_event 点击 (非客户区): ({x},{y}), btn={button}")
         finally:
             win32api.SetCursorPos(saved)
             self._show_real_cursor()
@@ -222,55 +146,20 @@ class MessageInjector:
     def _post(hwnd, msg, wparam, lparam):
         _send_message(hwnd, msg, wparam, lparam)
 
-    @staticmethod
-    def _is_uwp_window(class_name: str) -> bool:
-        """UWP/Modern 窗口不响应 PostMessage 鼠标消息，必须用 mouse_event"""
-        return any(kw in class_name for kw in (
-            "CoreWindow", "ApplicationFrame", "SearchHost", "SearchPane",
-        ))
-
     def double_click(self, x: int, y: int, button: str = "left"):
-        """双击：第一次 click，第二次用 WM_LBUTTONDBLCLK 触发双击行为"""
-        hwnd, cx, cy = self._find_window_and_pos(x, y)
-        if hwnd is None:
-            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
-            return
-
-        # UWP 窗口 → 物理点击
-        if self._is_uwp_window(win32gui.GetClassName(hwnd)):
-            self._click_via_mouse_event(x, y, button)
-            time.sleep(0.05)
-            self._click_via_mouse_event(x, y, button)
-            return
-
-        # 非客户区 → mouse_event 物理点击
-        if cx < 0 or cy < 0:
-            self._click_via_mouse_event(x, y, button)
-            time.sleep(0.05)
-            self._click_via_mouse_event(x, y, button)
-            return
-
+        """双击：连续两次 mouse_event 物理点击"""
+        hwnd, _, _ = self._find_window_and_pos(x, y)
         self._last_click_hwnd = hwnd
-        lparam = _make_lparam(cx, cy)
-
-        # 第一击：正常 click
-        self._post(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam)
-        time.sleep(0.02)
-        self._post(hwnd, WM_LBUTTONUP, 0, lparam)
+        self._mouse_click(x, y, button)
         time.sleep(0.05)
-
-        # 第二击：WM_LBUTTONDBLCLK 替换 WM_LBUTTONDOWN
-        self._post(hwnd, WM_LBUTTONDBLCLK, MK_LBUTTON, lparam)
-        time.sleep(0.02)
-        self._post(hwnd, WM_LBUTTONUP, 0, lparam)
-
-        self._focus_window(hwnd)
+        self._mouse_click(x, y, button)
         logger.debug(f"注入双击: ({x},{y}), btn={button}")
 
     def scroll(self, x: int, y: int, amount: int = 3):
         """滚动：Edit/浏览器用 WM_MOUSEWHEEL 纯消息，其他应用用 mouse_event 移动+滚轮。"""
-        hwnd, cx, cy = self._require_window(x, y)
+        hwnd, cx, cy = self._find_window_and_pos(x, y)
         if hwnd is None:
+            logger.warning(f"消息注入: 坐标 ({x},{y}) 下未找到窗口")
             return
 
         class_name = win32gui.GetClassName(hwnd)
@@ -371,195 +260,3 @@ class MessageInjector:
                 win32api.SetCursorPos(self._saved_cursor)
             self._show_real_cursor()
 
-    def _focus_window(self, hwnd: int):
-        """将键盘焦点强制设到目标窗口（仅当目标尚未获得焦点时）。
-
-        AttachThreadInput + SetFocus 在目标已有焦点时会干扰输入管道，
-        导致 keybd_event 注入的按键被丢弃。只在必要时使用。
-        """
-        if not hwnd:
-            return
-        current_focus = self._get_thread_focus()
-        if current_focus and current_focus == hwnd:
-            logger.debug(f"焦点已在目标控件 hwnd={hwnd}，跳过 SetFocus")
-            return
-        our_tid = ctypes.windll.kernel32.GetCurrentThreadId()
-        target_tid = user32.GetWindowThreadProcessId(hwnd, 0)
-        attached = False
-        if our_tid != target_tid:
-            attached = bool(user32.AttachThreadInput(our_tid, target_tid, True))
-        user32.SetFocus(hwnd)
-        time.sleep(0.05)
-        if attached:
-            user32.AttachThreadInput(our_tid, target_tid, False)
-        logger.debug(f"SetFocus hwnd={hwnd}, attached={attached}")
-
-    @staticmethod
-    def _get_thread_focus():
-        """获取前台线程的焦点控件（跨线程安全）"""
-        fg = win32gui.GetForegroundWindow()
-        if not fg:
-            return None
-        tid = user32.GetWindowThreadProcessId(fg, 0)
-        gti = _GUITHREADINFO()
-        gti.cbSize = ctypes.sizeof(gti)
-        if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
-            return gti.hwndFocus
-        return None
-
-    def type_text(self, text: str):
-        """注入文本。统一使用 keybd_event 系统级键盘注入。
-
-        Edit 控件的中文文本走剪贴板粘贴（keybd_event 无法生成 IME 序列）。"""
-        hwnd = self._keyboard_hwnd
-        if not hwnd:
-            logger.warning("type_text: 无目标窗口")
-            return
-
-        class_name = win32gui.GetClassName(hwnd)
-        is_edit = class_name == "Edit" or class_name.startswith("RichEdit")
-
-        if is_edit and any(ord(c) > 127 for c in text):
-            import pyperclip
-            old_clipboard = pyperclip.paste()
-            pyperclip.copy(text)
-            time.sleep(0.1)
-            _send_message(hwnd, WM_PASTE, 0, 0)
-            time.sleep(0.1)
-            try:
-                pyperclip.copy(old_clipboard)
-            except Exception:
-                pass
-            logger.debug(f"中文 WM_PASTE -> class={class_name}")
-        else:
-            self._focus_window(hwnd)
-            self._type_via_keybd(text)
-
-        logger.debug(f"注入文本: {text[:20]}{'...' if len(text) > 20 else ''}")
-
-    def _type_via_keybd(self, text: str):
-        """通过 keybd_event 逐字符输入文本（系统级，适用于所有窗口）"""
-        VK_SHIFT = 0x10
-        for ch in text:
-            code = user32.VkKeyScanW(ch)  # c_wchar argtype，传字符本身不是 ord()
-            if code == -1:
-                continue
-            vk = code & 0xFF
-            need_shift = (code >> 8) & 1
-            if need_shift:
-                user32.keybd_event(VK_SHIFT, 0, 0, 0)
-                time.sleep(0.01)
-            user32.keybd_event(vk, 0, 0, 0)
-            time.sleep(0.01)
-            user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
-            if need_shift:
-                user32.keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0)
-            time.sleep(0.01)
-
-    def press_key(self, key: str):
-        vk = _key_to_vk(key)
-        if vk:
-            self._focus_window(self._keyboard_hwnd)
-            self._inject_key(vk)
-        logger.debug(f"注入按键: {key}")
-
-    def hotkey(self, *keys: str):
-        """注入组合键。统一使用 keybd_event 系统级键盘注入。"""
-        combo = '+'.join(k.lower().strip() for k in keys)
-        hwnd = self._keyboard_hwnd
-
-        # ALT+F4 → WM_SYSCOMMAND(SC_CLOSE)，比模拟按键更可靠
-        if combo == "alt+f4":
-            if hwnd:
-                _send_message(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0)
-                logger.debug(f"注入 WM_SYSCOMMAND SC_CLOSE -> hwnd={hwnd}")
-            return
-
-        self._focus_window(hwnd)
-        vks = [_key_to_vk(k) for k in keys]
-        valid = [vk for vk in vks if vk]
-        for vk in valid:
-            self._inject_keydown(vk)
-            time.sleep(0.02)
-        for vk in reversed(valid):
-            self._inject_keyup(vk)
-            time.sleep(0.02)
-        logger.debug(f"注入组合键: {combo}")
-
-    def key_down(self, key: str):
-        vk = _key_to_vk(key)
-        if vk:
-            self._focus_window(self._keyboard_hwnd)
-            self._inject_keydown(vk)
-
-    def key_up(self, key: str):
-        vk = _key_to_vk(key)
-        if vk:
-            self._inject_keyup(vk)
-
-    def _inject_key(self, vk: int):
-        """keybd_event 注入完整按键（按下+释放）"""
-        user32.keybd_event(vk, 0, 0, 0)
-        time.sleep(0.02)
-        user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
-
-    def _inject_keydown(self, vk: int):
-        """keybd_event 注入按键按下"""
-        user32.keybd_event(vk, 0, 0, 0)
-
-    def _inject_keyup(self, vk: int):
-        """keybd_event 注入按键释放"""
-        user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
-
-    @property
-    def _keyboard_hwnd(self):
-        """键盘消息目标窗口：优先前台线程的焦点控件，其次上次点击窗口，最后前台窗口。"""
-        focus = self._get_thread_focus()
-        if focus:
-            return focus
-        return self._last_click_hwnd or win32gui.GetForegroundWindow()
-
-
-# ============ 键码映射 ============
-
-_VK_MAP = {
-    "enter": 0x0D, "return": 0x0D, "tab": 0x09, "escape": 0x1B, "esc": 0x1B,
-    "space": 0x20, "backspace": 0x08, "delete": 0x2E,
-    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
-    "home": 0x24, "end": 0x23, "pageup": 0x21, "pagedown": 0x22,
-    "shift": 0x10, "ctrl": 0x11, "alt": 0x12,
-    "win": 0x5B, "lwin": 0x5B, "rwin": 0x5C,
-    "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
-    "f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78,
-    "f10": 0x79, "f11": 0x7A, "f12": 0x7B,
-}
-
-
-def _key_to_vk(key: str) -> int:
-    key = key.strip().lower()
-    if key in _VK_MAP:
-        return _VK_MAP[key]
-    if len(key) == 1 and 'a' <= key <= 'z':
-        return ord(key.upper())
-    if len(key) == 1 and '0' <= key <= '9':
-        return ord(key)
-    logger.warning(f"不支持的按键: {key}")
-    return 0
-
-
-def _char_to_vk(ch: str) -> int:
-    """字符转虚拟键码（ASCII）"""
-    if 'a' <= ch <= 'z':
-        return ord(ch.upper())
-    if 'A' <= ch <= 'Z':
-        return ord(ch)
-    if '0' <= ch <= '9':
-        return ord(ch)
-    char_map = {
-        ' ': 0x20, '\n': 0x0D, '.': 0xBE, ',': 0xBC, '/': 0xBF,
-        ';': 0xBA, "'": 0xDE, '[': 0xDB, ']': 0xDD, '\\': 0xDC,
-        '-': 0xBD, '=': 0xBB,
-    }
-    if ch in char_map:
-        return char_map[ch]
-    return 0
