@@ -9,9 +9,18 @@ from langchain_core.tools import tool
 from drivers.screen_capture import get_screen_capture
 
 
+def _nice_step(dimension: int) -> int:
+    """返回适合该维度的网格步长（美观整数：500/200/100/50/20/10）"""
+    target = max(dimension // 5, 50)
+    for nice in (200, 100, 50, 20, 10):
+        if target >= nice:
+            return max(target // nice * nice, nice)
+    return 10
+
+
 def _overlay_coord_grid(img):
     """
-    在截图上叠加坐标参考标记，缩放到 GRID_SIZE × GRID_SIZE。
+    在截图上叠加坐标参考标记，缩放到 GRID_WIDTH × GRID_HEIGHT。
     """
     from config.settings import GRID_WIDTH, GRID_HEIGHT
 
@@ -25,49 +34,60 @@ def _overlay_coord_grid(img):
     output = cv2.resize(output, (GRID_WIDTH, GRID_HEIGHT), interpolation=cv2.INTER_LINEAR)
     h, w = GRID_HEIGHT, GRID_WIDTH
 
-    # 网格线和刻度间距（与尺寸成比例）
-    grid_size = max(GRID_WIDTH, GRID_HEIGHT)
-    grid_step = max(grid_size // 5, 50)
-    tick_step = max(grid_size // 10, 25)
-    margin = max(grid_size // 20, 25)
+    # x/y 各自计算网格间距和刻度间距
+    grid_step_x = _nice_step(w)
+    grid_step_y = _nice_step(h)
+    tick_step_x = max(grid_step_x // 2, 10)
+    tick_step_y = max(grid_step_y // 2, 10)
+    margin = max(max(w, h) // 25, 25)
 
     font = cv2.FONT_HERSHEY_SIMPLEX
+    fontScale = 0.6
+    thickness = 1
 
     # 边缘半透明黑色背景
     overlay = output.copy()
-    cv2.rectangle(overlay, (0, 0), (w-1, margin), (0, 0, 0), -1)
-    cv2.rectangle(overlay, (0, h-margin), (w-1, h-1), (0, 0, 0), -1)
-    cv2.rectangle(overlay, (0, 0), (margin, h-1), (0, 0, 0), -1)
-    cv2.rectangle(overlay, (w-margin, 0), (w-1, h-1), (0, 0, 0), -1)
+    cv2.rectangle(overlay, (0, 0), (w-1, margin), (0, 0, 0), -1)          # 顶部
+    cv2.rectangle(overlay, (0, h-margin), (w-1, h-1), (0, 0, 0), -1)      # 底部
+    cv2.rectangle(overlay, (0, 0), (margin, h-1), (0, 0, 0), -1)          # 左侧
+    cv2.rectangle(overlay, (w-margin, 0), (w-1, h-1), (0, 0, 0), -1)      # 右侧
     cv2.addWeighted(output, 0.6, overlay, 0.4, 0, output)
-
-    fontScale = 0.8
-    thickness = 2
-    tick_len = 15
 
     # 粗黑边框
     cv2.rectangle(output, (0, 0), (w-1, h-1), (0, 0, 0), 4)
 
     # 灰色网格线
     grid_color = (180, 180, 180)
-    for x in range(0, w, grid_step):
+    for x in range(0, w, grid_step_x):
         cv2.line(output, (x, 0), (x, h), grid_color, 1)
-    for y in range(0, h, grid_step):
+    for y in range(0, h, grid_step_y):
         cv2.line(output, (0, y), (w, y), grid_color, 1)
 
-    # 上下边缘 x 坐标
-    for x in range(0, w, tick_step):
-        cv2.line(output, (x, 0), (x, tick_len), (255, 255, 255), 2)
-        cv2.putText(output, str(x), (x-15, margin-15), font, fontScale, (255, 255, 255), thickness)
-        cv2.line(output, (x, h-1), (x, h-1-tick_len), (255, 255, 255), 2)
-        cv2.putText(output, str(x), (x-15, h-8), font, fontScale, (255, 255, 255), thickness)
+    # 上下边缘 x 坐标 + 刻度
+    tick_len = 12
+    for x in range(0, w, tick_step_x):
+        # 顶部
+        cv2.line(output, (x, 0), (x, tick_len), (255, 255, 255), 1)
+        label = str(x)
+        (tw, th), _ = cv2.getTextSize(label, font, fontScale, thickness)
+        cv2.putText(output, label, (x - tw // 2, margin - 6),
+                    font, fontScale, (255, 255, 255), thickness)
+        # 底部
+        cv2.line(output, (x, h-1), (x, h-1-tick_len), (255, 255, 255), 1)
+        cv2.putText(output, label, (x - tw // 2, h - margin + th + 4),
+                    font, fontScale, (255, 255, 255), thickness)
 
-    # 左右边缘 y 坐标
-    for y in range(0, h, tick_step):
-        cv2.line(output, (0, y), (tick_len, y), (255, 255, 255), 2)
-        cv2.putText(output, str(y), (15, y+7), font, fontScale, (255, 255, 255), thickness)
-        cv2.line(output, (w-1, y), (w-1-tick_len, y), (255, 255, 255), 2)
-        cv2.putText(output, str(y), (w-40, y+7), font, fontScale, (255, 255, 255), thickness)
+    # 左右边缘 y 坐标 + 刻度
+    for y in range(0, h, tick_step_y):
+        cv2.line(output, (0, y), (tick_len, y), (255, 255, 255), 1)
+        label = str(y)
+        (tw, th), _ = cv2.getTextSize(label, font, fontScale, thickness)
+        cv2.putText(output, label, (margin - tw - 4, y + th // 2),
+                    font, fontScale, (255, 255, 255), thickness)
+        # 右侧
+        cv2.line(output, (w-1, y), (w-1-tick_len, y), (255, 255, 255), 1)
+        cv2.putText(output, label, (w - margin + 4, y + th // 2),
+                    font, fontScale, (255, 255, 255), thickness)
 
     # 中心红色十字
     cx, cy = w // 2, h // 2
