@@ -113,10 +113,10 @@ class MessageInjector:
         logger.debug(f"注入双击: ({x},{y}), btn={button}")
 
     def scroll(self, x: int, y: int, amount: int = 3):
-        """滚动：mouse_event WHEEL + 透明光标，所有窗口通用。
+        """滚动：MOUSEEVENTF_ABSOLUTE 定位 + MOUSEEVENTF_WHEEL + 透明光标。
 
-        PostMessage WM_MOUSEWHEEL 对 Electron 应用（飞书、VS Code 等）无效，
-        统一使用 mouse_event 避免兼容性问题。
+        MOUSEEVENTF_WHEEL 使用逻辑光标位置（MOUSEEVENTF_ABSOLUTE 坐标系），
+        不能依赖 SetCursorPos 设置的物理位置。
         """
         hwnd, _, _ = self._find_window_and_pos(x, y)
         if hwnd is None:
@@ -126,12 +126,18 @@ class MessageInjector:
         saved = win32api.GetCursorPos()
         self._hide_real_cursor()
         try:
-            win32api.SetCursorPos((x, y))
+            screen_w = win32api.GetSystemMetrics(0)
+            screen_h = win32api.GetSystemMetrics(1)
+            abs_x = int(x * 65535 / screen_w)
+            abs_y = int(y * 65535 / screen_h)
+            win32api.mouse_event(
+                win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE,
+                abs_x, abs_y, 0, 0)
             time.sleep(0.01)
             win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0,
                                  amount * WHEEL_DELTA, 0)
             time.sleep(0.02)
-            logger.debug(f"scroll mouse_event: amount={amount}, class={win32gui.GetClassName(hwnd)}")
+            logger.debug(f"scroll: amount={amount}, class={win32gui.GetClassName(hwnd)}")
         finally:
             win32api.SetCursorPos(saved)
             self._show_real_cursor()
