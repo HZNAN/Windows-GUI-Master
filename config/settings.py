@@ -14,34 +14,18 @@ SCREENSHOTS_DIR = PROJECT_ROOT / ".screenshots"
 SCREENSHOTS_DIR.mkdir(exist_ok=True)
 
 # ============ LLM 模型配置（OpenAI 兼容 API，支持任意厂商） ============
-# 新变量名（通用）优先，旧 ARK_ 变量名作为向后兼容
+# 优先级: LLM_* env > ARK_* env (向后兼容) > 默认值
 LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("ARK_API_KEY") or ""
 LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("ARK_API_URL") or "https://ark.cn-beijing.volces.com/api/v3"
 LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("ARK_VISION_MODEL") or "doubao-seed-2-0-lite-260215"
-
-# 向后兼容别名（deprecated，实际读取上述 LLM_ 变量）
-ARK_API_KEY = LLM_API_KEY
-ARK_API_URL = LLM_BASE_URL
-ARK_VISION_MODEL = LLM_MODEL
-
-# ============ Agent 执行配置 ============
-MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))
-SCREENSHOT_INTERVAL = float(os.getenv("SCREENSHOT_INTERVAL", "0.5"))
-STEP_TIMEOUT = int(os.getenv("STEP_TIMEOUT", "30"))
-
-# ============ ReactAgent 配置 ============
-AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))
-AGENT_HISTORY_WINDOW = int(os.getenv("AGENT_HISTORY_WINDOW", "3"))
-AGENT_TURN_DELAY = float(os.getenv("AGENT_TURN_DELAY", "0.3"))  # 每轮操作完成后到下一轮截图的等待（秒），给 UI 时间渲染
-
-# ============ LLM 模型配置 ============
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 LLM_TOP_P = float(os.getenv("LLM_TOP_P", "1.0"))
 
-# ============ 日志配置 ============
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
-LOG_FILE = PROJECT_ROOT / "logs" / "agent.log"
+# ============ ReactAgent 配置 ============
+AGENT_MAX_STEPS = int(os.getenv("AGENT_MAX_STEPS", "15"))
+AGENT_HISTORY_WINDOW = int(os.getenv("AGENT_HISTORY_WINDOW", "3"))
+AGENT_TURN_DELAY = float(os.getenv("AGENT_TURN_DELAY", "0.3"))
 
 # ============ 虚拟光标配置 ============
 # 相对路径: 相对于 PROJECT_ROOT/cursors/ 目录，如 "universe"
