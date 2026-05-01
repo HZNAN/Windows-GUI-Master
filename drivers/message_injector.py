@@ -134,8 +134,14 @@ class MessageInjector:
                 win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE,
                 abs_x, abs_y, 0, 0)
             time.sleep(0.01)
-            win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0,
-                                 amount * WHEEL_DELTA, 0)
+            # 拆分成多个单步滚轮事件，避免 dwData 负值溢出
+            # MOUSEEVENTF_WHEEL 的 dwData 是 DWORD (32-bit unsigned)
+            steps = abs(amount)
+            direction = 1 if amount > 0 else -1
+            for _ in range(steps):
+                win32api.mouse_event(win32con.MOUSEEVENTF_WHEEL, 0, 0,
+                                     direction * WHEEL_DELTA, 0)
+                time.sleep(0.01)
             time.sleep(0.02)
             logger.debug(f"scroll: amount={amount}, class={win32gui.GetClassName(hwnd)}")
         finally:
