@@ -85,15 +85,14 @@ Two transport modes:
 | `virtual` | `InputControl(virtual_mode=True)` | SetCursorPos + mouse_event (save/restore) | Brief flicker |
 | `normal` | `InputControl()` | pyautogui | Full real cursor |
 
-**MessageInjector** (`drivers/message_injector.py`): Mouse-only injection driver. All clicks use `mouse_event` + hidden cursor (transparent `SetSystemCursor` replacement). PostMessage `WM_LBUTTONDOWN/UP` was abandoned after proving unreliable on UWP/CoreWindow, system UI, non-client area, and various third-party apps. Scroll is hybrid: `PostMessage WM_MOUSEWHEEL` for Edit/Chrome (zero cursor impact), `mouse_event` for others.
+**MessageInjector** (`drivers/message_injector.py`): Mouse-only driver (208 lines). All operations use `mouse_event` + transparent `SetSystemCursor` replacement → `SetCursorPos` → `mouse_event` → restore cursor. PostMessage was abandoned entirely — proved unreliable on UWP, system UI, Electron apps (Feishu/VS Code), non-client area, and various third-party apps.
 
 **Input dispatch table:**
 
 | Operation | Method |
 |-----------|--------|
 | click / double_click | mouse_event + hidden cursor |
-| scroll (Edit/Chrome) | PostMessage WM_MOUSEWHEEL |
-| scroll (other) | mouse_event WHEEL + hidden cursor |
+| scroll | mouse_event WHEEL + hidden cursor |
 | drag / mouse_down / mouse_up | mouse_event + hidden cursor |
 | type_text (ASCII) | pyautogui.write |
 | type_text (Chinese) | pyautogui.hotkey('ctrl', 'v') + clipboard |
