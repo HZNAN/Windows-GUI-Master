@@ -13,10 +13,17 @@ PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 SCREENSHOTS_DIR = PROJECT_ROOT / ".screenshots"
 SCREENSHOTS_DIR.mkdir(exist_ok=True)
 
-# ============ 火山引擎 ARK 视觉模型配置 ============
-ARK_API_KEY = os.getenv("ARK_API_KEY", "ark-692bf554-d0fc-4b45-bde6-ba0157d4de54-b4a75")
-ARK_API_URL = os.getenv("ARK_API_URL", "https://ark.cn-beijing.volces.com/api/v3")
-ARK_VISION_MODEL = os.getenv("ARK_VISION_MODEL", "doubao-seed-2-0-lite-260215")
+# ============ LLM 模型配置（OpenAI 兼容 API，支持任意厂商） ============
+# 新变量名（通用）优先，旧 ARK_ 变量名作为向后兼容
+_FALLBACK_KEY = "ark-692bf554-d0fc-4b45-bde6-ba0157d4de54-b4a75"
+LLM_API_KEY = os.getenv("LLM_API_KEY") or os.getenv("ARK_API_KEY") or _FALLBACK_KEY
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or os.getenv("ARK_API_URL") or "https://ark.cn-beijing.volces.com/api/v3"
+LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("ARK_VISION_MODEL") or "doubao-seed-2-0-lite-260215"
+
+# 向后兼容别名（deprecated，实际读取上述 LLM_ 变量）
+ARK_API_KEY = LLM_API_KEY
+ARK_API_URL = LLM_BASE_URL
+ARK_VISION_MODEL = LLM_MODEL
 
 # ============ Agent 执行配置 ============
 MAX_RETRY = int(os.getenv("MAX_RETRY", "3"))

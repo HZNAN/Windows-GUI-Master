@@ -10,7 +10,7 @@ Windows desktop automation agent using a ReAct loop with vision model. The agent
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env                     # then edit .env with your ARK_API_KEY
+cp .env.example .env                     # then edit .env with your LLM_API_KEY
 cp .acpxrc.json.example .acpxrc.json     # for acpx CLI integration
 ```
 
@@ -117,8 +117,10 @@ All config in `config/settings.py`, loaded from `.env` via `python-dotenv`. Key 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ARK_API_KEY` | (hardcoded default) | 火山引擎 ARK API key |
-| `ARK_VISION_MODEL` | `doubao-seed-2-0-lite-260215` | Vision model ID |
+| `LLM_API_KEY` | (hardcoded default) | OpenAI 兼容 API Key（火山/小米/智谱/OpenAI 等） |
+| `LLM_BASE_URL` | `https://ark.cn-beijing.volces.com/api/v3` | API 地址（OpenAI 兼容格式） |
+| `LLM_MODEL` | `doubao-seed-2-0-lite-260215` | 模型名称（vision-capable） |
+| `ARK_API_KEY` / `ARK_API_URL` / `ARK_VISION_MODEL` | (deprecated) | 向后兼容别名，优先使用 LLM_* 变量 |
 | `AGENT_MAX_STEPS` | 15 | Max ReAct loop iterations |
 | `AGENT_HISTORY_WINDOW` | 3 | Turns kept in context |
 | `AGENT_TURN_DELAY` | 0.3 | Pause (seconds) after tools finish before next turn screenshot |

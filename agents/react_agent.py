@@ -51,15 +51,15 @@ class ReactAgentLoop:
 
     def _init_llm(self):
         from config.settings import (
-            ARK_API_KEY, ARK_API_URL, ARK_VISION_MODEL,
+            LLM_API_KEY, LLM_BASE_URL, LLM_MODEL,
             LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_TOP_P
         )
 
         # 绑定工具，LangChain 会自动处理 tool_call 格式
         self.llm = ChatOpenAI(
-            model=ARK_VISION_MODEL,
-            api_key=ARK_API_KEY,
-            base_url=ARK_API_URL,
+            model=LLM_MODEL,
+            api_key=LLM_API_KEY,
+            base_url=LLM_BASE_URL,
             temperature=LLM_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
             top_p=LLM_TOP_P,
