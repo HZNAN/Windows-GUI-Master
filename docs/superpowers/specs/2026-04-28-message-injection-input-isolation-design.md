@@ -245,6 +245,26 @@ PostMessage `WM_LBUTTONDOWN/UP` 被以下类型窗口静默忽略：
 
 键盘操作同样经历了 PostMessage → keybd_event → pyautogui 的演进，最终选择 pyautogui 作为键盘注入的统一方案。
 
+### 14. CopyImage(LR_COPYFROMRESOURCE) 复制光标失败 (2026-05-02)
+
+`CopyImage(h_arrow, IMAGE_CURSOR, 0, 0, LR_COPYFROMRESOURCE)` — `LR_COPYFROMRESOURCE` 是从 EXE 资源复制不是从句柄复制，静默返回 0 → `_hide_real_cursor` 提前 return 不隐藏光标。中间还试过 `CopyCursor`（ctypes 中不存在，是 `CopyIcon` 宏别名）。最终用 `CopyImage(h_arrow, IMAGE_CURSOR, 0, 0, 0)`（flags=0 复制已加载句柄）。
+
+### 15. DestroyCursor 销毁系统光标 (2026-05-02)
+
+`_show_real_cursor()` 在 `SetSystemCursor(backup, OCR_NORMAL)` 后调 `DestroyCursor(backup)` → 系统箭头被销毁 → 所有后续鼠标操作失效。
+
+### 16. _execute_tool 丢弃工具返回值 (2026-05-02)
+
+`result = scroll.func(**args)` 赋值了但返回字符串没用 `result` → scroll 的边界检测提示模型永远看不到 → 不停重复无效滚动。所有 12 个工具都有同样问题，一并修复。
+
+### 17. 工具返回屏幕坐标而非网格坐标 (2026-05-02)
+
+鼠标工具返回 `(96, 264)` 屏幕坐标，模型只在 1000×1000 网格上工作。统一改为网格坐标。
+
+### 18. 虚拟光标 move_to 异常阻塞点击 (2026-05-02)
+
+`move_to()` 抛异常 → 外层 `except Exception: return False` → click 返回失败，`mouse_event` 从未执行。改为独立 try/except，动画失败降级继续。
+
 ## Fallback
 
 Set `INPUT_MODE=virtual` in `.env` to revert to the teleport-based approach at runtime. Set `INPUT_MODE=normal` for pyautogui direct control.
