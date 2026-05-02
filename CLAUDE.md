@@ -76,7 +76,7 @@ Two transport modes:
 
 **ReAct Agent** (`agents/react_agent.py`): LangChain-based loop with `ChatOpenAI` bound to tools. Multi-tool-call per turn, sliding history window of 3 turns, screenshot verification after each action. System prompt from `prompts/system_prompt.txt` with Python format-string substitution for grid dimensions, step sizes, center point, and tick marks — resolved at runtime by `_build_system_prompt()`.
 
-**Tools** (`tools/`): LangChain `@tool`-decorated functions exposed to the LLM. `screen.py` captures screenshot with 1000×1000 coordinate grid overlay. `mouse.py`/`keyboard.py` accept grid coordinates. `agent.py` provides state tools (`finish`/`continue_steps`/`retry`) — every turn must end with one.
+**Tools** (`tools/`): LangChain `@tool(parse_docstring=True)` functions with Google-style docstrings (`Args:`/`Returns:`). Parameter descriptions are extracted from docstrings and sent to the LLM in the tool schema. `screen.py` captures screenshot with coordinate grid overlay. `mouse.py`/`keyboard.py` accept grid coordinates. `agent.py` provides state tools (`finish`/`continue_steps`/`retry`/`ask_human`).
 
 **Execution Engine** (`core/execution_engine.py`): Translates tool calls into driver commands. Routes to `InputControl` based on `INPUT_MODE` config.
 
