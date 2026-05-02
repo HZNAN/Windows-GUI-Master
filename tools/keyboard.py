@@ -4,20 +4,26 @@
 import time
 from langchain_core.tools import tool
 
+from config.settings import GRID_WIDTH, GRID_HEIGHT
 from tools._shared import get_executor, grid_to_screen
 
+_GRID = f"{GRID_WIDTH}×{GRID_HEIGHT}"
 
-@tool
-def type_text(text: str, grid_x: int | None = None, grid_y: int | None = None) -> str:
+
+@tool(parse_docstring=True)
+def type_text(text: str, reason: str, step_type: str,
+              grid_x: int | None = None, grid_y: int | None = None) -> str:
     """
     输入文本。如果提供了坐标，先点击定位再输入；如果没有坐标，假设光标已存在，直接输入。
 
-    参数:
+    Args:
         text: 要输入的文本内容
-        grid_x: 1000x1000 网格坐标系中的 X 坐标（可选。如果光标已在此位置可不填）
-        grid_y: 1000x1000 网格坐标系中的 Y 坐标（可选。如果光标已在此位置可不填）
+        reason: 简短描述本轮操作（过去式），如"输入了搜索关键词"
+        step_type: "continue"（操作成功，继续下一步）或 "retry"（操作失败，需要重试）
+        grid_x: 1000x1000 网格坐标系中的 X 坐标（可选）
+        grid_y: 1000x1000 网格坐标系中的 Y 坐标（可选）
 
-    返回:
+    Returns:
         操作结果描述
     """
     executor = get_executor()
@@ -39,15 +45,17 @@ def type_text(text: str, grid_x: int | None = None, grid_y: int | None = None) -
     return f"输入文本失败"
 
 
-@tool
-def press_key(key: str) -> str:
+@tool(parse_docstring=True)
+def press_key(key: str, reason: str, step_type: str) -> str:
     """
     按下指定键盘按键。
 
-    参数:
-        key: 按键名称，如 "Enter", "Escape", "Tab", "Backspace", "Ctrl+A", "Ctrl+V" 等
+    Args:
+        key: 按键名称，如 "Enter", "Escape", "Tab", "Backspace" 等
+        reason: 简短描述本轮操作（过去式），如"按下回车确认"
+        step_type: "continue" 或 "retry"
 
-    返回:
+    Returns:
         操作结果描述
     """
     ok = get_executor().execute(action="press", key=key)
@@ -56,16 +64,17 @@ def press_key(key: str) -> str:
     return f"按键 {key} 失败"
 
 
-@tool
-def hotkey(keys: str) -> str:
+@tool(parse_docstring=True)
+def hotkey(keys: str, reason: str, step_type: str) -> str:
     """
-    按下组合键（如 Ctrl+C 全选复制）。
+    按下组合键（如 Ctrl+V 粘贴）。
 
-    参数:
-        keys: 组合键字符串，用逗号分隔，如 "ctrl,c" 表示 Ctrl+C，"ctrl,v" 表示 Ctrl+V，
-              "ctrl,shift,a" 表示 Ctrl+Shift+A，"ctrl,a" 表示全选
+    Args:
+        keys: 组合键字符串，用逗号分隔，如 "ctrl,c" 表示 Ctrl+C，"ctrl,v" 表示 Ctrl+V
+        reason: 简短描述本轮操作（过去式），如"按下 Ctrl+V 粘贴内容"
+        step_type: "continue" 或 "retry"
 
-    返回:
+    Returns:
         操作结果描述
     """
     ok = get_executor().execute(action="hotkey", text=keys)
@@ -75,15 +84,17 @@ def hotkey(keys: str) -> str:
     return f"组合键 {keys} 失败"
 
 
-@tool
-def key_down(key: str) -> str:
+@tool(parse_docstring=True)
+def key_down(key: str, reason: str, step_type: str) -> str:
     """
     按住指定按键不释放（用于需要组合键的场景，如拖拽时按住 Ctrl）。
 
-    参数:
+    Args:
         key: 按键名称，如 "ctrl", "shift", "alt", "win" 等
+        reason: 简短描述本轮操作（过去式）
+        step_type: "continue" 或 "retry"
 
-    返回:
+    Returns:
         操作结果描述
     """
     ok = get_executor().execute(action="key_down", key=key)
@@ -92,15 +103,17 @@ def key_down(key: str) -> str:
     return f"按键 {key} 失败"
 
 
-@tool
-def key_up(key: str) -> str:
+@tool(parse_docstring=True)
+def key_up(key: str, reason: str, step_type: str) -> str:
     """
     释放之前按住的按键（与 key_down 配合使用）。
 
-    参数:
+    Args:
         key: 按键名称，如 "ctrl", "shift", "alt", "win" 等
+        reason: 简短描述本轮操作（过去式）
+        step_type: "continue" 或 "retry"
 
-    返回:
+    Returns:
         操作结果描述
     """
     ok = get_executor().execute(action="key_up", key=key)
@@ -109,16 +122,23 @@ def key_up(key: str) -> str:
     return f"按键 {key} 失败"
 
 
-@tool
-def wait(seconds: float = 1.0) -> str:
+@tool(parse_docstring=True)
+def wait(seconds: float, reason: str, step_type: str) -> str:
     """
     等待指定时间（秒）。
 
-    参数:
+    Args:
         seconds: 等待时间（秒），默认 1.0
+        reason: 简短描述等待原因（如"等待页面加载"）
+        step_type: "continue" 或 "retry"
 
-    返回:
+    Returns:
         等待完成描述
     """
     time.sleep(seconds)
     return f"等待 {seconds} 秒完成"
+
+
+# 将工具描述中的硬编码 1000x1000 替换为实际配置值
+for _t in [type_text, press_key, hotkey, key_down, key_up, wait]:
+    _t.description = _t.description.replace("1000×1000", _GRID).replace("1000x1000", _GRID)

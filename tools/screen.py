@@ -96,12 +96,12 @@ def _overlay_coord_grid(img):
     return output, orig_w, orig_h
 
 
-@tool
+@tool(parse_docstring=True)
 def screenshot() -> dict:
     """
     捕获当前屏幕截图，返回带坐标网格的图像供分析。
 
-    返回:
+    Returns:
         dict: 包含 image (base64) 和实际尺寸 info
 
     使用场景:
