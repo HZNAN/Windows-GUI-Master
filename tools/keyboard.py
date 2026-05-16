@@ -30,17 +30,14 @@ def type_text(text: str, reason: str, step_type: str,
 
     if grid_x is not None and grid_y is not None:
         screen_x, screen_y = grid_to_screen(grid_x, grid_y)
-        ok1 = executor.execute(action="click", x=screen_x, y=screen_y)
-        time.sleep(0.3)
     else:
-        ok1 = True
         screen_x, screen_y = None, None
 
-    ok2 = executor.execute(action="type", x=screen_x, y=screen_y, text=text)
+    ok = executor.execute(action="type", x=screen_x, y=screen_y, text=text)
 
-    if ok1 and ok2:
-        if screen_x is not None:
-            return f"成功在坐标 ({screen_x}, {screen_y}) 输入文本: {text}"
+    if ok:
+        if grid_x is not None:
+            return f"成功在网格坐标 ({grid_x}, {grid_y}) 输入文本: {text}"
         return f"成功输入文本: {text}"
     return f"输入文本失败"
 
@@ -123,7 +120,7 @@ def key_up(key: str, reason: str, step_type: str) -> str:
 
 
 @tool(parse_docstring=True)
-def wait(seconds: float, reason: str, step_type: str) -> str:
+def wait(seconds: float = 1.0, reason: str = "", step_type: str = "continue") -> str:
     """
     等待指定时间（秒）。
 

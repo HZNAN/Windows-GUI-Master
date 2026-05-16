@@ -29,9 +29,11 @@ outputs/
 .acpx_logs/
 .acpxrc.json
 
-# Superpowers
+# Superpowers & Docs
 .superpowers/
 .claude/
+CLAUDE.md
+docs/
 
 # Temp/scratch
 12.0
@@ -39,6 +41,20 @@ outputs/
 debug_stdin.py
 minimal_stdio.py
 resume_cua.md
+analyze_quality.py
+check_code_quality.py
+
+# Test files (exclude all, then whitelist ACP entry points)
+test_*.py
+!test_acp_stdio.py
+!test_react_agent_acp.py
+
+# Test artifacts
+test_*.json
+test_*.md
+
+# Docs plans (too large)
+docs/superpowers/plans/
 
 # OS
 Thumbs.db

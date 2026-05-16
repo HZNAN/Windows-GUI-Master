@@ -1,12 +1,12 @@
 {
-  "defaultAgent": "feishu-test",
+  "defaultAgent": "gui-master",
   "nonInteractivePermissions": "deny",
   "authPolicy": "skip",
   "ttl": 300,
   "queueMaxDepth": 16,
   "format": "text",
   "agents": {
-    "feishu-test": {
+    "gui-master": {
       "command": "python -u test_acp_stdio.py",
       "env": {},
       "protocol": "acp"

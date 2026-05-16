@@ -45,7 +45,7 @@ class ACPHandler:
     async def on_initialize(self, client_info: dict, capabilities: dict) -> dict:
         """处理 initialize (Client -> Server)"""
         return {
-            "name": "feishu-agent",
+            "name": "window-gui-master",
             "version": "1.0.0",
         }
 

@@ -16,7 +16,7 @@ def finish() -> str:
 
 
 @tool(parse_docstring=True)
-def ask_human(question: str) -> str:
+def ask_human(question: str, reason: str, step_type: str) -> str:
     """
     向人类请求帮助或确认。调用后会阻塞等待人类回复，然后继续执行。
 
@@ -27,6 +27,8 @@ def ask_human(question: str) -> str:
 
     Args:
         question: 向人类提出的问题，用自然语言描述
+        reason: 简短描述本轮操作（过去式），如"遇到无法识别的弹窗，请求人类帮助"
+        step_type: "continue" 或 "retry"
 
     Returns:
         人类的回复文本。如果超时（5分钟无响应）则返回 "[Human did not respond]"。

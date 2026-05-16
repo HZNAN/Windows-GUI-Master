@@ -21,6 +21,7 @@ LLM_MODEL = os.getenv("LLM_MODEL") or os.getenv("ARK_VISION_MODEL") or "doubao-s
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "1500"))
 LLM_TOP_P = float(os.getenv("LLM_TOP_P", "1.0"))
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "medium")  # low | medium | high (mimo-v2.5 仅三档)
 
 # ============ 截图 / 坐标网格配置 ============
 _gs = int(os.getenv("GRID_SIZE", "0"))

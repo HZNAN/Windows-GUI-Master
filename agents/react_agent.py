@@ -67,7 +67,8 @@ class ReactAgentLoop:
     def _init_llm(self):
         from config.settings import (
             LLM_API_KEY, LLM_BASE_URL, LLM_MODEL,
-            LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_TOP_P
+            LLM_TEMPERATURE, LLM_MAX_TOKENS, LLM_TOP_P,
+            LLM_REASONING_EFFORT,
         )
 
         # 绑定工具，LangChain 会自动处理 tool_call 格式
@@ -78,6 +79,7 @@ class ReactAgentLoop:
             temperature=LLM_TEMPERATURE,
             max_tokens=LLM_MAX_TOKENS,
             top_p=LLM_TOP_P,
+            model_kwargs={"reasoning_effort": LLM_REASONING_EFFORT},
         ).bind_tools(
             [
                 click, move_mouse, double_click, right_click, scroll, drag,
@@ -102,8 +104,7 @@ class ReactAgentLoop:
 
     @staticmethod
     def _clean_tool_name(raw_name: str) -> str:
-        name = raw_name.split('"')[0].strip() if '"' in raw_name else raw_name.strip()
-        return name.lower()
+        return raw_name.strip().strip('"').lower()
 
     @staticmethod
     def _clean_tool_args(raw_args) -> dict:
@@ -156,7 +157,7 @@ class ReactAgentLoop:
                 result = scroll.func(**args)
                 grid_x = args.get('grid_x', 0)
                 grid_y = args.get('grid_y', 0)
-                amount = args.get('amount', 3)
+                amount = args.get('amount', 5)
                 return f"[scroll] grid_x={grid_x}, grid_y={grid_y}, amount={amount} | {result}"
             elif tool_name == "drag":
                 result = drag.func(**args)
@@ -300,7 +301,7 @@ class ReactAgentLoop:
         多工具调用模式：
         - 每轮开始时截图一次（唯一一次），作为 LLM 视觉输入
         - 模型一次可调用多个工具，中间不再截图
-        - 最后一个工具必须是 finish/continue_steps/retry
+        - 每个动作工具通过 step_type 参数表达本轮结果，任务完成时调用 finish
 
         Previous result 格式：
         reason | tool_output (status)
@@ -420,6 +421,12 @@ class ReactAgentLoop:
                                           rawOutput={"text": result})
 
                     if tool_name == "finish":
+                        # 在结束前先解析上一轮的 (check) 状态，避免历史丢失
+                        st = _last_step_type if _last_step_type in ("continue", "retry") else "continue"
+                        rsn = _last_reason if _last_reason else "任务已完成"
+                        history_turns = self._update_history(
+                            history_turns, current_turn_operations, rsn, st
+                        )
                         finish_result = ReactResult(
                             goal=self.goal,
                             success=True,
@@ -429,18 +436,6 @@ class ReactAgentLoop:
                         self._append_turn_log(step_count, prev_result_text, content, str(tc_names))
                         self._finalize_task_log(finish_result)
                         return finish_result
-
-                    elif tool_name == "continue_steps":
-                        reason = tool_args.get('reason', '')
-                        history_turns = self._update_history(
-                            history_turns, current_turn_operations, reason, "continue"
-                        )
-
-                    elif tool_name == "retry":
-                        reason = tool_args.get('reason', '')
-                        history_turns = self._update_history(
-                            history_turns, current_turn_operations, reason, "retry"
-                        )
 
                     else:
                         current_turn_operations.append((tool_name, result))

@@ -4,7 +4,7 @@ ReactAgent ACP 集成测试
 
 使用方式:
   1. python test_react_agent_acp.py  (启动 ACP 服务端)
-  2. acpx feishu-test "你的任务"
+  2. acpx gui-master "你的任务"
 """
 import asyncio
 import concurrent.futures
@@ -34,7 +34,7 @@ class ReactAgentHandler(ACPHandler):
 
     async def on_initialize(self, client_info: dict, capabilities: dict) -> dict:
         logger.info(f"Client initializing: {client_info}, capabilities: {capabilities}")
-        return {"name": "feishu-react-agent", "version": "1.0.0"}
+        return {"name": "window-gui-master", "version": "1.0.0"}
 
     async def on_new_session(self, session_id: str | None, cwd: str) -> dict:
         session_id = self.service.create_session(session_id=session_id, cwd=cwd)
@@ -112,7 +112,7 @@ class ReactAgentHandler(ACPHandler):
         logger.info(f"Execute: action={action}, params={params}")
 
         if action == "server.info":
-            return {"name": "feishu-react-agent", "version": "1.0.0", "status": "running"}
+            return {"name": "window-gui-master", "version": "1.0.0", "status": "running"}
         elif action == "echo":
             return {"echo": params}
         elif action == "add":

@@ -4,8 +4,8 @@ ACP Stdio 服务端 - 集成 ReactAgent
 供 acpx CLI 通过 stdio 连接测试
 
 使用方法:
-  acpx feishu-test sessions new
-  acpx feishu-test "你的任务"
+  acpx gui-master sessions new
+  acpx gui-master "你的任务"
 """
 import asyncio
 import concurrent.futures
@@ -51,7 +51,7 @@ class StdioHandler:
         return {
             "protocolVersion": "1.0",
             "capabilities": {"execute": True, "confirm": True, "push": True},
-            "serverInfo": {"name": "feishu-react-agent", "version": "1.0.0"},
+            "serverInfo": {"name": "window-gui-master", "version": "1.0.0"},
         }
 
     async def handle_new_session(self, params: dict) -> dict:
@@ -139,7 +139,7 @@ class StdioHandler:
         print(f"[STDIO] Execute: action={action}", file=sys.stderr)
 
         if action == "server.info":
-            return {"name": "feishu-react-agent", "version": "1.0.0", "status": "running"}
+            return {"name": "window-gui-master", "version": "1.0.0", "status": "running"}
         elif action == "echo":
             return {"echo": action_params}
         elif action == "add":
